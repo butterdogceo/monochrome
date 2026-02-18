@@ -3,8 +3,8 @@ import { lastFMStorage } from './storage.js';
 
 export class LastFMScrobbler {
     constructor() {
-        this.API_KEY = '0ecf01914957b40c17030db822845a76';
-        this.API_SECRET = 'bd37e61e0b16b8c7bf8de2862de5493c';
+        this.DEFAULT_API_KEY = '85214f5abbc730e78770f27784b9bdf7';
+        this.DEFAULT_API_SECRET = '2c2c37fd86739191860db810dd063292';
         this.API_URL = 'https://ws.audioscrobbler.com/2.0/';
 
         this.sessionKey = null;
@@ -15,7 +15,22 @@ export class LastFMScrobbler {
         this.hasScrobbled = false;
         this.isScrobbling = false;
 
+        this.loadCredentials();
         this.loadSession();
+    }
+
+    loadCredentials() {
+        if (lastFMStorage.useCustomCredentials()) {
+            this.API_KEY = lastFMStorage.getCustomApiKey() || this.DEFAULT_API_KEY;
+            this.API_SECRET = lastFMStorage.getCustomApiSecret() || this.DEFAULT_API_SECRET;
+        } else {
+            this.API_KEY = this.DEFAULT_API_KEY;
+            this.API_SECRET = this.DEFAULT_API_SECRET;
+        }
+    }
+
+    reloadCredentials() {
+        this.loadCredentials();
     }
 
     loadSession() {
@@ -92,10 +107,10 @@ export class LastFMScrobbler {
         console.log('Signature string:', signatureString);
 
         try {
-            const { default: md5 } = await import('https://cdn.jsdelivr.net/npm/md5@2.3.0/+esm');
+            const { default: md5 } = await import('./md5.js');
             return md5(signatureString);
-        } catch {
-            console.error('MD5 library not available');
+        } catch (e) {
+            console.error('MD5 library not available', e);
             throw new Error('MD5 library required for Last.fm');
         }
     }
@@ -171,6 +186,55 @@ export class LastFMScrobbler {
             throw new Error('No session returned');
         } catch (error) {
             console.error('Authentication failed:', error);
+            throw error;
+        }
+    }
+
+    async authenticateWithCredentials(username, password) {
+        try {
+            const params = {
+                username: username,
+                password: password,
+                api_key: this.API_KEY,
+                method: 'auth.getMobileSession',
+            };
+
+            const signature = await this.generateSignature(params);
+
+            const formData = new URLSearchParams({
+                username: username,
+                password: password,
+                api_key: this.API_KEY,
+                method: 'auth.getMobileSession',
+                api_sig: signature,
+                format: 'json',
+            });
+
+            const response = await fetch(this.API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: formData,
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                throw new Error(data.message || 'Last.fm authentication error');
+            }
+
+            if (data.session) {
+                this.saveSession(data.session.key, data.session.name);
+                return {
+                    success: true,
+                    username: data.session.name,
+                };
+            }
+
+            throw new Error('No session returned');
+        } catch (error) {
+            console.error('Mobile authentication failed:', error);
             throw error;
         }
     }

@@ -9,7 +9,13 @@ import {
     getTrackYearDisplay,
     createQualityBadgeHTML,
 } from './utils.js';
-import { queueManager, replayGainSettings, trackDateSettings } from './storage.js';
+import {
+    queueManager,
+    replayGainSettings,
+    trackDateSettings,
+    exponentialVolumeSettings,
+    audioEffectsSettings,
+} from './storage.js';
 import { audioContextManager } from './audio-context.js';
 
 export class Player {
@@ -99,11 +105,36 @@ export class Player {
             scale = 1.0 / peak;
         }
 
-        // Calculate effective volume
-        const effectiveVolume = this.userVolume * scale;
+        // Apply exponential volume curve if enabled
+        const curvedVolume = exponentialVolumeSettings.applyCurve(this.userVolume);
 
-        // Apply to audio element
-        this.audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+        // Calculate effective volume
+        const effectiveVolume = curvedVolume * scale;
+
+        // Apply to audio element and/or Web Audio graph
+        if (audioContextManager.isReady()) {
+            // If Web Audio is active, we apply volume there for better compatibility
+            // Especially on Linux where audio.volume might not affect the Web Audio graph
+            // We set audio.volume to 1.0 to avoid double-reduction, or keep it synced?
+            // Some browsers require audio.volume to be set for system media controls to show volume
+            this.audio.volume = 1.0;
+            audioContextManager.setVolume(effectiveVolume);
+        } else {
+            this.audio.volume = Math.max(0, Math.min(1, effectiveVolume));
+        }
+    }
+
+    applyAudioEffects() {
+        const speed = audioEffectsSettings.getSpeed();
+        if (this.audio.playbackRate !== speed) {
+            this.audio.playbackRate = speed;
+        }
+    }
+
+    setPlaybackSpeed(speed) {
+        const validSpeed = Math.max(0.01, Math.min(100, parseFloat(speed) || 1.0));
+        audioEffectsSettings.setSpeed(validSpeed);
+        this.applyAudioEffects();
     }
 
     loadQueueState() {
@@ -191,6 +222,7 @@ export class Player {
             // Must happen before audio.play() or audio won't route through Web Audio
             if (!audioContextManager.isReady()) {
                 audioContextManager.init(this.audio);
+                this.applyReplayGain();
             }
             await audioContextManager.resume();
 
@@ -211,6 +243,7 @@ export class Player {
             // Ensure audio context is active for iOS lock screen controls
             if (!audioContextManager.isReady()) {
                 audioContextManager.init(this.audio);
+                this.applyReplayGain();
             }
             await audioContextManager.resume();
             this.playPrev();
@@ -220,6 +253,7 @@ export class Player {
             // Ensure audio context is active for iOS lock screen controls
             if (!audioContextManager.isReady()) {
                 audioContextManager.init(this.audio);
+                this.applyReplayGain();
             }
             await audioContextManager.resume();
             this.playNext();
@@ -305,6 +339,14 @@ export class Player {
             return;
         }
 
+        // Check if track is blocked
+        const { contentBlockingSettings } = await import('./storage.js');
+        if (contentBlockingSettings.shouldHideTrack(track)) {
+            console.warn(`Attempted to play blocked track: ${track.title}. Skipping...`);
+            this.playNext();
+            return;
+        }
+
         this.saveQueueState();
 
         this.currentTrack = track;
@@ -343,6 +385,7 @@ export class Player {
         this.updatePlayingTrackIndicator();
         this.updateMediaSession(track);
         this.updateMediaSessionPlaybackState();
+        this.updateNativeWindow(track);
 
         try {
             let streamUrl;
@@ -384,6 +427,7 @@ export class Player {
 
                 this.currentRgValues = null;
                 this.applyReplayGain();
+                this.applyAudioEffects();
 
                 this.audio.src = streamUrl;
 
@@ -422,6 +466,7 @@ export class Player {
                 streamUrl = URL.createObjectURL(track.file);
                 this.currentRgValues = null; // No replaygain for local files yet
                 this.applyReplayGain();
+                this.applyAudioEffects();
 
                 this.audio.src = streamUrl;
 
@@ -453,27 +498,43 @@ export class Player {
                 }
                 await this.audio.play();
             } else {
-                // Get track data for ReplayGain (should be cached by API)
-                const trackData = await this.api.getTrack(track.id, this.quality);
+                const isQobuz = String(track.id).startsWith('q:');
 
-                if (trackData && trackData.info) {
-                    this.currentRgValues = {
-                        trackReplayGain: trackData.info.trackReplayGain,
-                        trackPeakAmplitude: trackData.info.trackPeakAmplitude,
-                        albumReplayGain: trackData.info.albumReplayGain,
-                        albumPeakAmplitude: trackData.info.albumPeakAmplitude,
-                    };
-                } else {
+                if (isQobuz) {
+                    // Qobuz: skip getTrack call, directly fetch stream URL
                     this.currentRgValues = null;
-                }
-                this.applyReplayGain();
+                    this.applyReplayGain();
 
-                if (this.preloadCache.has(track.id)) {
-                    streamUrl = this.preloadCache.get(track.id);
-                } else if (trackData.originalTrackUrl) {
-                    streamUrl = trackData.originalTrackUrl;
+                    if (this.preloadCache.has(track.id)) {
+                        streamUrl = this.preloadCache.get(track.id);
+                    } else {
+                        streamUrl = await this.api.getStreamUrl(track.id, this.quality);
+                    }
                 } else {
-                    streamUrl = this.api.extractStreamUrlFromManifest(trackData.info.manifest);
+                    // Tidal: Get track data for ReplayGain (should be cached by API)
+                    const trackData = await this.api.getTrack(track.id, this.quality);
+
+                    if (trackData && trackData.info) {
+                        this.currentRgValues = {
+                            trackReplayGain: trackData.info.trackReplayGain,
+                            trackPeakAmplitude: trackData.info.trackPeakAmplitude,
+                            albumReplayGain: trackData.info.albumReplayGain,
+                            albumPeakAmplitude: trackData.info.albumPeakAmplitude,
+                        };
+                    } else {
+                        this.currentRgValues = null;
+                    }
+                    this.applyReplayGain();
+
+                    if (this.preloadCache.has(track.id)) {
+                        streamUrl = this.preloadCache.get(track.id);
+                    } else if (trackData.originalTrackUrl) {
+                        streamUrl = trackData.originalTrackUrl;
+                    } else if (trackData.info?.manifest) {
+                        streamUrl = this.api.extractStreamUrlFromManifest(trackData.info.manifest);
+                    } else {
+                        streamUrl = await this.api.getStreamUrl(track.id, this.quality);
+                    }
                 }
 
                 // Handle playback
@@ -549,33 +610,42 @@ export class Player {
         const isLastTrack = this.currentQueueIndex >= currentQueue.length - 1;
 
         if (recursiveCount > currentQueue.length) {
-            console.error('All tracks in queue are unavailable.');
+            console.error('All tracks in queue are unavailable or blocked.');
             this.audio.pause();
             return;
         }
 
-        if (this.repeatMode === REPEAT_MODE.ONE && !currentQueue[this.currentQueueIndex]?.isUnavailable) {
+        // Import blocking settings dynamically
+        import('./storage.js').then(({ contentBlockingSettings }) => {
+            if (
+                this.repeatMode === REPEAT_MODE.ONE &&
+                !currentQueue[this.currentQueueIndex]?.isUnavailable &&
+                !contentBlockingSettings.shouldHideTrack(currentQueue[this.currentQueueIndex])
+            ) {
+                this.playTrackFromQueue(0, recursiveCount);
+                return;
+            }
+
+            if (!isLastTrack) {
+                this.currentQueueIndex++;
+                const track = currentQueue[this.currentQueueIndex];
+                // Skip unavailable and blocked tracks
+                if (track?.isUnavailable || contentBlockingSettings.shouldHideTrack(track)) {
+                    return this.playNext(recursiveCount + 1);
+                }
+            } else if (this.repeatMode === REPEAT_MODE.ALL) {
+                this.currentQueueIndex = 0;
+                const track = currentQueue[this.currentQueueIndex];
+                // Skip unavailable and blocked tracks
+                if (track?.isUnavailable || contentBlockingSettings.shouldHideTrack(track)) {
+                    return this.playNext(recursiveCount + 1);
+                }
+            } else {
+                return;
+            }
+
             this.playTrackFromQueue(0, recursiveCount);
-            return;
-        }
-
-        if (!isLastTrack) {
-            this.currentQueueIndex++;
-            // Skip unavailable tracks
-            if (currentQueue[this.currentQueueIndex].isUnavailable) {
-                return this.playNext(recursiveCount + 1);
-            }
-        } else if (this.repeatMode === REPEAT_MODE.ALL) {
-            this.currentQueueIndex = 0;
-            // Skip unavailable tracks
-            if (currentQueue[this.currentQueueIndex].isUnavailable) {
-                return this.playNext(recursiveCount + 1);
-            }
-        } else {
-            return;
-        }
-
-        this.playTrackFromQueue(0, recursiveCount);
+        });
     }
 
     playPrev(recursiveCount = 0) {
@@ -584,19 +654,22 @@ export class Player {
             this.updateMediaSessionPositionState();
         } else if (this.currentQueueIndex > 0) {
             this.currentQueueIndex--;
-            // Skip unavailable tracks
+            // Skip unavailable and blocked tracks
             const currentQueue = this.shuffleActive ? this.shuffledQueue : this.queue;
 
             if (recursiveCount > currentQueue.length) {
-                console.error('All tracks in queue are unavailable.');
+                console.error('All tracks in queue are unavailable or blocked.');
                 this.audio.pause();
                 return;
             }
 
-            if (currentQueue[this.currentQueueIndex].isUnavailable) {
-                return this.playPrev(recursiveCount + 1);
-            }
-            this.playTrackFromQueue(0, recursiveCount);
+            import('./storage.js').then(({ contentBlockingSettings }) => {
+                const track = currentQueue[this.currentQueueIndex];
+                if (track?.isUnavailable || contentBlockingSettings.shouldHideTrack(track)) {
+                    return this.playPrev(recursiveCount + 1);
+                }
+                this.playTrackFromQueue(0, recursiveCount);
+            });
         }
     }
 
@@ -976,5 +1049,17 @@ export class Player {
 
         updateBtn(timerBtn);
         updateBtn(timerBtnDesktop);
+    }
+
+    async updateNativeWindow(track) {
+        if (!window.Neutralino) return;
+
+        const trackTitle = getTrackTitle(track);
+        const artist = getTrackArtists(track);
+        try {
+            await Neutralino.window.setTitle(`${trackTitle} • ${artist}`);
+        } catch (e) {
+            console.error('Failed to set window title:', e);
+        }
     }
 }

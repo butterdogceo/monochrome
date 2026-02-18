@@ -1,7 +1,7 @@
 export class MusicDatabase {
     constructor() {
         this.dbName = 'MonochromeDB';
-        this.version = 7;
+        this.version = 8;
         this.db = null;
     }
 
@@ -59,6 +59,10 @@ export class MusicDatabase {
                 }
                 if (!db.objectStoreNames.contains('settings')) {
                     db.createObjectStore('settings');
+                }
+                if (!db.objectStoreNames.contains('pinned_items')) {
+                    const store = db.createObjectStore('pinned_items', { keyPath: 'id' });
+                    store.createIndex('pinnedAt', 'pinnedAt', { unique: false });
                 }
             };
         });
@@ -306,6 +310,81 @@ export class MusicDatabase {
         return item;
     }
 
+    _minifyPinnedItem(item, type) {
+        if (!item) return null;
+
+        const id = item.id || item.uuid;
+        let name, cover, href, images;
+
+        switch (type) {
+            case 'album':
+                name = item.title;
+                cover = item.cover;
+                href = `/album/${id}`;
+                break;
+            case 'artist':
+                name = item.name;
+                cover = item.picture;
+                href = `/artist/${id}`;
+                break;
+            case 'playlist':
+                name = item.title || item.name;
+                cover = item.image || item.cover;
+                href = `/playlist/${id}`;
+                break;
+            case 'user-playlist':
+                name = item.name;
+                cover = item.cover;
+                images = item.images;
+                href = `/userplaylist/${id}`;
+                break;
+            default:
+                return null;
+        }
+
+        return {
+            id: id,
+            type: type,
+            name: name,
+            cover: cover,
+            images: images,
+            href: href,
+        };
+    }
+
+    async togglePinned(item, type) {
+        const storeName = 'pinned_items';
+        const minifiedItem = this._minifyPinnedItem(item, type);
+        if (!minifiedItem) return;
+
+        const key = minifiedItem.id;
+        const exists = await this.isPinned(key);
+
+        if (exists) {
+            await this.performTransaction(storeName, 'readwrite', (store) => store.delete(key));
+            return false;
+        } else {
+            const allPinned = await this.getPinned();
+            if (allPinned.length >= 3) {
+                const oldest = allPinned.sort((a, b) => a.pinnedAt - b.pinnedAt)[0];
+                await this.performTransaction(storeName, 'readwrite', (store) => store.delete(oldest.id));
+            }
+            const entry = { ...minifiedItem, pinnedAt: Date.now() };
+            await this.performTransaction(storeName, 'readwrite', (store) => store.put(entry));
+            return true;
+        }
+    }
+
+    async isPinned(id) {
+        const storeName = 'pinned_items';
+        try {
+            const result = await this.performTransaction(storeName, 'readonly', (store) => store.get(id));
+            return !!result;
+        } catch {
+            return false;
+        }
+    }
+
     async exportData() {
         const tracks = await this.getFavorites('track');
         const albums = await this.getFavorites('album');
@@ -383,8 +462,6 @@ export class MusicDatabase {
                             }
                         });
                     }
-
-                    console.log(`${storeName}: Adding item with ID ${item.id || item.uuid || item.timestamp}`);
 
                     // Critical: Ensure key exists for IndexedDB store.put()
                     const keyPath = store.keyPath;
@@ -466,13 +543,14 @@ export class MusicDatabase {
     }
 
     // User Playlists API
-    async createPlaylist(name, tracks = [], cover = '') {
+    async createPlaylist(name, tracks = [], cover = '', description = '') {
         const id = crypto.randomUUID();
         const playlist = {
             id: id,
             name: name,
             tracks: tracks.map((t) => this._minifyItem('track', { ...t, addedAt: Date.now() })),
             cover: cover,
+            description: description,
             createdAt: Date.now(),
             updatedAt: Date.now(),
             numberOfTracks: tracks.length,
@@ -610,6 +688,23 @@ export class MusicDatabase {
         await this.performTransaction('user_folders', 'readwrite', (store) => store.delete(id));
     }
 
+    async getPinned() {
+        const storeName = 'pinned_items';
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(storeName, 'readonly');
+            const store = transaction.objectStore(storeName);
+            const request = store.getAll();
+
+            request.onsuccess = () => {
+                const results = request.result;
+                results.sort((a, b) => b.pinnedAt - a.pinnedAt);
+                resolve(results);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
     async getPlaylists(includeTracks = false) {
         const db = await this.open();
         return new Promise((resolve, reject) => {
@@ -664,6 +759,18 @@ export class MusicDatabase {
         playlist.name = newName;
         playlist.updatedAt = Date.now();
         await this.performTransaction('user_playlists', 'readwrite', (store) => store.put(playlist));
+        return playlist;
+    }
+
+    async updatePlaylistDescription(playlistId, newDescription) {
+        const playlist = await this.performTransaction('user_playlists', 'readonly', (store) => store.get(playlistId));
+        if (!playlist) throw new Error('Playlist not found');
+        playlist.description = newDescription;
+        playlist.updatedAt = Date.now();
+        await this.performTransaction('user_playlists', 'readwrite', (store) => store.put(playlist));
+
+        this._dispatchPlaylistSync('update', playlist);
+
         return playlist;
     }
 

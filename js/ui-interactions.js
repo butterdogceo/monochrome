@@ -9,9 +9,14 @@ import {
     getTrackArtists,
     escapeHtml,
     createQualityBadgeHTML,
+    positionMenu,
 } from './utils.js';
 import { sidePanelManager } from './side-panel.js';
-import { downloadQualitySettings } from './storage.js';
+import { downloadQualitySettings, contentBlockingSettings } from './storage.js';
+import { db } from './db.js';
+import { syncManager } from './accounts/pocketbase.js';
+import { showNotification, downloadTracks } from './downloads.js';
+import { trackSearchTabChange, trackOpenQueue } from './analytics.js';
 
 export function initializeUIInteractions(player, api, ui) {
     const sidebar = document.querySelector('.sidebar');
@@ -53,9 +58,6 @@ export function initializeUIInteractions(player, api, ui) {
                 const folderId = folderCard.dataset.folderId;
 
                 if (playlistId && folderId) {
-                    const { db } = await import('./db.js');
-                    const { syncManager } = await import('./accounts/pocketbase.js');
-                    const { showNotification } = await import('./downloads.js');
                     const updatedFolder = await db.addPlaylistToFolder(folderId, playlistId);
                     syncManager.syncUserFolder(updatedFolder, 'update');
                     const subtitle = folderCard.querySelector('.card-subtitle');
@@ -126,7 +128,6 @@ export function initializeUIInteractions(player, api, ui) {
         const downloadBtn = container.querySelector('#download-queue-btn');
         if (downloadBtn) {
             downloadBtn.addEventListener('click', async () => {
-                const { downloadTracks } = await import('./downloads.js');
                 downloadTracks(currentQueue, api, downloadQualitySettings.getQuality());
             });
         }
@@ -134,10 +135,6 @@ export function initializeUIInteractions(player, api, ui) {
         const likeBtn = container.querySelector('#like-queue-btn');
         if (likeBtn) {
             likeBtn.addEventListener('click', async () => {
-                const { db } = await import('./db.js'); // Already imported
-                const { syncManager } = await import('./accounts/pocketbase.js');
-                const { showNotification } = await import('./downloads.js');
-
                 let addedCount = 0;
                 for (const track of currentQueue) {
                     const wasAdded = await db.toggleFavorite('track', track);
@@ -160,10 +157,6 @@ export function initializeUIInteractions(player, api, ui) {
         const addToPlaylistBtn = container.querySelector('#add-queue-to-playlist-btn');
         if (addToPlaylistBtn) {
             addToPlaylistBtn.addEventListener('click', async () => {
-                const { db } = await import('./db.js'); // Already imported
-                const { syncManager } = await import('./accounts/pocketbase.js');
-                const { showNotification } = await import('./downloads.js');
-
                 const playlists = await db.getPlaylists();
                 if (playlists.length === 0) {
                     showNotification('No playlists yet. Create one first.');
@@ -250,12 +243,16 @@ export function initializeUIInteractions(player, api, ui) {
         const html = currentQueue
             .map((track, index) => {
                 const isPlaying = index === player.currentQueueIndex;
+                const isBlocked = contentBlockingSettings?.shouldHideTrack(track);
                 const trackTitle = getTrackTitle(track);
                 const trackArtists = getTrackArtists(track, { fallback: 'Unknown' });
                 const qualityBadge = createQualityBadgeHTML(track);
+                const blockedTitle = isBlocked
+                    ? `title="Blocked: ${contentBlockingSettings.isTrackBlocked(track.id) ? 'Track blocked' : contentBlockingSettings.isArtistBlocked(track.artist?.id) ? 'Artist blocked' : 'Album blocked'}"`
+                    : '';
 
                 return `
-                <div class="queue-track-item ${isPlaying ? 'playing' : ''}" data-queue-index="${index}" data-track-id="${track.id}" draggable="true">
+                <div class="queue-track-item ${isPlaying ? 'playing' : ''} ${isBlocked ? 'blocked' : ''}" data-queue-index="${index}" data-track-id="${track.id}" draggable="${isBlocked ? 'false' : 'true'}" ${blockedTitle}>
                     <div class="drag-handle">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <line x1="5" y1="8" x2="19" y2="8"></line>
@@ -270,7 +267,7 @@ export function initializeUIInteractions(player, api, ui) {
                             <div class="artist">${escapeHtml(trackArtists)}</div>
                         </div>
                     </div>
-                    <div class="track-item-duration">${formatTime(track.duration)}</div>
+                    <div class="track-item-duration">${isBlocked ? '--:--' : formatTime(track.duration)}</div>
                     <button class="queue-like-btn" data-action="toggle-like" title="Add to Liked">
                         ${SVG_HEART}
                     </button>
@@ -291,7 +288,6 @@ export function initializeUIInteractions(player, api, ui) {
             // Update like button state
             const likeBtn = item.querySelector('.queue-like-btn');
             if (likeBtn && track) {
-                const { db } = await import('./db.js');
                 const isLiked = await db.isFavorite('track', track.id);
                 likeBtn.classList.toggle('active', isLiked);
                 likeBtn.innerHTML = isLiked
@@ -313,10 +309,6 @@ export function initializeUIInteractions(player, api, ui) {
                     e.stopPropagation();
                     const track = player.getCurrentQueue()[index];
                     if (track) {
-                        const { db } = await import('./db.js'); // Already imported
-                        const { syncManager } = await import('./accounts/pocketbase.js');
-                        const { showNotification } = await import('./downloads.js');
-
                         const added = await db.toggleFavorite('track', track);
                         syncManager.syncLibraryItem('track', track, added);
 
@@ -333,6 +325,11 @@ export function initializeUIInteractions(player, api, ui) {
                     return;
                 }
 
+                // Don't play blocked tracks
+                if (item.classList.contains('blocked')) {
+                    return;
+                }
+
                 player.playAtIndex(index);
                 refreshQueuePanel();
             });
@@ -343,7 +340,6 @@ export function initializeUIInteractions(player, api, ui) {
                 if (contextMenu) {
                     const track = player.getCurrentQueue()[index];
                     if (track) {
-                        const { db } = await import('./db.js');
                         const isLiked = await db.isFavorite('track', track.id);
                         const likeItem = contextMenu.querySelector('li[data-action="toggle-like"]');
                         if (likeItem) {
@@ -356,22 +352,7 @@ export function initializeUIInteractions(player, api, ui) {
                             trackMixItem.style.display = hasMix ? 'block' : 'none';
                         }
 
-                        const menuWidth = 150;
-                        const menuHeight = 200;
-
-                        let left = e.clientX;
-                        let top = e.clientY;
-
-                        if (left + menuWidth > window.innerWidth) {
-                            left = window.innerWidth - menuWidth - 10;
-                        }
-                        if (top + menuHeight > window.innerHeight) {
-                            top = e.clientY - menuHeight - 10;
-                        }
-
-                        contextMenu.style.left = `${left}px`;
-                        contextMenu.style.top = `${top}px`;
-                        contextMenu.style.display = 'block';
+                        positionMenu(contextMenu, e.clientX, e.clientY);
 
                         contextMenu._contextTrack = track;
                     }
@@ -406,6 +387,7 @@ export function initializeUIInteractions(player, api, ui) {
     };
 
     const openQueuePanel = () => {
+        trackOpenQueue();
         sidePanelManager.open('queue', 'Queue', renderQueueControls, renderQueueContent);
     };
 
@@ -440,9 +422,6 @@ export function initializeUIInteractions(player, api, ui) {
             const playlistId = e.dataTransfer.getData('text/playlist-id');
             const folderId = window.location.pathname.split('/')[2];
             if (playlistId && folderId) {
-                const { db } = await import('./db.js');
-                const { syncManager } = await import('./accounts/pocketbase.js');
-                const { showNotification } = await import('./downloads.js');
                 try {
                     const updatedFolder = await db.addPlaylistToFolder(folderId, playlistId);
                     syncManager.syncUserFolder(updatedFolder, 'update');
@@ -461,6 +440,9 @@ export function initializeUIInteractions(player, api, ui) {
         tab.addEventListener('click', () => {
             const page = tab.closest('.page');
             if (!page) return;
+
+            // Track tab change
+            trackSearchTabChange(tab.dataset.tab);
 
             page.querySelectorAll('.search-tab').forEach((t) => t.classList.remove('active'));
             page.querySelectorAll('.search-tab-content').forEach((c) => c.classList.remove('active'));
@@ -483,6 +465,11 @@ export function initializeUIInteractions(player, api, ui) {
 
             const contentId = `settings-tab-${tab.dataset.tab}`;
             document.getElementById(contentId)?.classList.add('active');
+
+            // Save active tab
+            import('./storage.js').then(({ settingsUiState }) => {
+                settingsUiState.setActiveTab(tab.dataset.tab);
+            });
         });
     });
 
@@ -514,6 +501,12 @@ export function initializeUIInteractions(player, api, ui) {
             finalY = e.clientY - rect.height - 10;
         }
 
+        // Ensure it stays within viewport
+        if (finalX < 5) finalX = 5;
+        if (finalY < 5) finalY = 5;
+        if (finalX + rect.width > winWidth - 5) finalX = winWidth - rect.width - 5;
+        if (finalY + rect.height > winHeight - 5) finalY = winHeight - rect.height - 5;
+
         tooltipEl.style.transform = `translate(${finalX}px, ${finalY}px)`;
         // Reset top/left to 0 since we use transform
         tooltipEl.style.top = '0';
@@ -522,7 +515,7 @@ export function initializeUIInteractions(player, api, ui) {
 
     document.body.addEventListener('mouseover', (e) => {
         const selector =
-            '.card-title, .card-subtitle, .track-item-details .title, .track-item-details .artist, .now-playing-bar .title, .now-playing-bar .artist, .now-playing-bar .album';
+            '.card-title, .card-subtitle, .track-item-details .title, .track-item-details .artist, .now-playing-bar .title, .now-playing-bar .artist, .now-playing-bar .album, .pinned-item-name';
         const target = e.target.closest(selector);
 
         if (target) {

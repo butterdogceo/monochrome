@@ -675,8 +675,10 @@ export class LosslessAPI {
 
     async getArtist(artistId, options = {}) {
         const cacheKey = options.lightweight ? `artist_${artistId}_light` : `artist_${artistId}`;
-        const cached = await this.cache.get('artist', cacheKey);
-        if (cached) return cached;
+        if (!options.skipCache) {
+            const cached = await this.cache.get('artist', cacheKey);
+            if (cached) return cached;
+        }
 
         const [primaryResponse, contentResponse] = await Promise.all([
             this.fetchWithRetry(`/artist/?id=${artistId}`),
@@ -811,7 +813,7 @@ export class LosslessAPI {
         }
     }
 
-    async getRecommendedTracksForPlaylist(tracks, limit = 20) {
+    async getRecommendedTracksForPlaylist(tracks, limit = 20, options = {}) {
         const artistMap = new Map();
 
         // Check if tracks already have artist info (some might)
@@ -868,16 +870,13 @@ export class LosslessAPI {
         const seenTrackIds = new Set(tracks.map((t) => t.id));
 
         const artistsToProcess = artists.slice(0, Math.min(5, artists.length));
-        console.log(`Processing ${artistsToProcess.length} artists for recommendations`);
 
         const artistPromises = artistsToProcess.map(async (artist) => {
             try {
                 console.log(`Fetching tracks for artist: ${artist.name} (ID: ${artist.id})`);
-                const artistData = await this.getArtist(artist.id, { lightweight: true });
+                const artistData = await this.getArtist(artist.id, { lightweight: true, skipCache: options.skipCache });
                 if (artistData && artistData.tracks && artistData.tracks.length > 0) {
                     const newTracks = artistData.tracks.filter((track) => !seenTrackIds.has(track.id)).slice(0, 4);
-
-                    console.log(`Found ${newTracks.length} new tracks from ${artist.name}`);
                     return newTracks;
                 } else {
                     console.warn(`No tracks found for artist ${artist.name}`);
@@ -896,8 +895,6 @@ export class LosslessAPI {
                 seenTrackIds.add(...tracks.map((t) => t.id));
             }
         });
-
-        console.log(`Total recommended tracks found: ${recommendedTracks.length}`);
 
         const shuffled = recommendedTracks.sort(() => 0.5 - Math.random());
         return shuffled.slice(0, limit);

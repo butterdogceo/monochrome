@@ -36,12 +36,10 @@ class GeniusManager {
     async searchTrack(title, artist) {
         const cleanTitle = title.split('(')[0].split('-')[0].trim();
         const query = encodeURIComponent(`${cleanTitle} ${artist}`);
-
-        const url = `https://api.genius.com/search?q=${query}`;
         const token = this.getToken();
-        const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {
-            headers: { Authorization: `Bearer ${token}` },
-        });
+
+        const url = `https://api.genius.com/search?q=${query}&access_token=${token}`;
+        const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
 
         if (!response.ok) throw new Error('Failed to search Genius');
 
@@ -61,10 +59,8 @@ class GeniusManager {
 
     async getReferents(songId) {
         const token = this.getToken();
-        const url = `https://api.genius.com/referents?song_id=${songId}&text_format=plain&per_page=50`;
-        const response = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`, {
-            headers: { Authorization: `Bearer ${token}` },
-        });
+        const url = `https://api.genius.com/referents?song_id=${songId}&text_format=plain&per_page=50&access_token=${token}`;
+        const response = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
 
         if (!response.ok) throw new Error('Failed to fetch annotations');
 
@@ -372,7 +368,7 @@ export class LyricsManager {
         return new Promise((resolve, reject) => {
             const script = document.createElement('script');
             script.type = 'module';
-            script.src = 'https://cdn.jsdelivr.net/npm/@uimaxbai/am-lyrics@0.6.5/dist/src/am-lyrics.min.js';
+            script.src = 'https://cdn.jsdelivr.net/npm/@uimaxbai/am-lyrics/dist/src/am-lyrics.min.js';
 
             script.onload = () => {
                 if (typeof customElements !== 'undefined') {
@@ -930,6 +926,29 @@ export function openLyricsPanel(track, audioPlayer, lyricsManager, forceOpen = f
     sidePanelManager.open('lyrics', 'Lyrics', renderControls, renderContent, forceOpen);
 }
 
+function getLyricsHighlightColor() {
+    // Check if the current theme is light
+    const isLight = getComputedStyle(document.documentElement).colorScheme === 'light';
+    return isLight ? '#000' : '#fff';
+}
+
+function updateLyricsTheme() {
+    const highlightColor = getLyricsHighlightColor();
+    document.querySelectorAll('am-lyrics').forEach((el) => {
+        el.setAttribute('highlight-color', highlightColor);
+    });
+}
+
+// watch for theme changes
+const themeObserver = new MutationObserver(() => {
+    updateLyricsTheme();
+});
+
+themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme', 'style'],
+});
+
 async function renderLyricsComponent(container, track, audioPlayer, lyricsManager) {
     container.innerHTML = '<div class="lyrics-loading">Loading lyrics...</div>';
 
@@ -955,7 +974,7 @@ async function renderLyricsComponent(container, track, audioPlayer, lyricsManage
         amLyrics.setAttribute('query', `${title} ${artist}`.trim());
         if (isrc) amLyrics.setAttribute('isrc', isrc);
 
-        amLyrics.setAttribute('highlight-color', '#93c5fd');
+        amLyrics.setAttribute('highlight-color', getLyricsHighlightColor());
         amLyrics.setAttribute('hover-background-color', 'rgba(59, 130, 246, 0.14)');
         amLyrics.setAttribute('autoscroll', '');
         amLyrics.setAttribute('interpolate', '');
@@ -964,8 +983,6 @@ async function renderLyricsComponent(container, track, audioPlayer, lyricsManage
 
         container.appendChild(amLyrics);
 
-        // Setup observer IMMEDIATELY to catch lyrics as they load (not after waiting)
-        // This is critical - observer must be running before lyrics arrive from LRCLIB
         lyricsManager.setupLyricsObserver(amLyrics);
 
         // If Romaji mode is enabled and track has Asian text, ensure Kuroshiro is ready

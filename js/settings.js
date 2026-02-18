@@ -24,6 +24,15 @@ import {
     homePageSettings,
     sidebarSectionSettings,
     fontSettings,
+    monoAudioSettings,
+    exponentialVolumeSettings,
+    audioEffectsSettings,
+    settingsUiState,
+    pwaUpdateSettings,
+    contentBlockingSettings,
+    musicProviderSettings,
+    analyticsSettings,
+    queueBehaviorSettings,
 } from './storage.js';
 import { audioContextManager, EQ_PRESETS } from './audio-context.js';
 import { getButterchurnPresets } from './visualizers/butterchurn.js';
@@ -33,6 +42,16 @@ import { syncManager } from './accounts/pocketbase.js';
 import { saveFirebaseConfig, clearFirebaseConfig } from './accounts/config.js';
 
 export function initializeSettings(scrobbler, player, api, ui) {
+    // Restore last active settings tab
+    const savedTab = settingsUiState.getActiveTab();
+    const settingsTab = document.querySelector(`.settings-tab[data-tab="${savedTab}"]`);
+    if (settingsTab) {
+        document.querySelectorAll('.settings-tab').forEach((t) => t.classList.remove('active'));
+        document.querySelectorAll('.settings-tab-content').forEach((c) => c.classList.remove('active'));
+        settingsTab.classList.add('active');
+        document.getElementById(`settings-tab-${savedTab}`)?.classList.add('active');
+    }
+
     // Initialize account system UI & Settings
     authManager.updateUI(authManager.user);
 
@@ -122,6 +141,19 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const lastfmToggleSetting = document.getElementById('lastfm-toggle-setting');
     const lastfmLoveToggle = document.getElementById('lastfm-love-toggle');
     const lastfmLoveSetting = document.getElementById('lastfm-love-setting');
+    const lastfmCustomCredsToggle = document.getElementById('lastfm-custom-creds-toggle');
+    const lastfmCustomCredsToggleSetting = document.getElementById('lastfm-custom-creds-toggle-setting');
+    const lastfmCustomCredsSetting = document.getElementById('lastfm-custom-creds-setting');
+    const lastfmCustomApiKey = document.getElementById('lastfm-custom-api-key');
+    const lastfmCustomApiSecret = document.getElementById('lastfm-custom-api-secret');
+    const lastfmSaveCustomCreds = document.getElementById('lastfm-save-custom-creds');
+    const lastfmClearCustomCreds = document.getElementById('lastfm-clear-custom-creds');
+    const lastfmCredentialAuth = document.getElementById('lastfm-credential-auth');
+    const lastfmCredentialForm = document.getElementById('lastfm-credential-form');
+    const lastfmUsernameInput = document.getElementById('lastfm-username');
+    const lastfmPasswordInput = document.getElementById('lastfm-password');
+    const lastfmLoginCredentialsBtn = document.getElementById('lastfm-login-credentials');
+    const lastfmUseOAuthBtn = document.getElementById('lastfm-use-oauth');
 
     function updateLastFMUI() {
         if (scrobbler.lastfm.isAuthenticated()) {
@@ -132,12 +164,47 @@ export function initializeSettings(scrobbler, player, api, ui) {
             lastfmLoveSetting.style.display = 'flex';
             lastfmToggle.checked = lastFMStorage.isEnabled();
             lastfmLoveToggle.checked = lastFMStorage.shouldLoveOnLike();
+            lastfmCustomCredsToggleSetting.style.display = 'flex';
+            lastfmCustomCredsToggle.checked = lastFMStorage.useCustomCredentials();
+            updateCustomCredsUI();
+            hideCredentialAuth();
         } else {
             lastfmStatus.textContent = 'Connect your Last.fm account to scrobble tracks';
             lastfmConnectBtn.textContent = 'Connect Last.fm';
             lastfmConnectBtn.classList.remove('danger');
             lastfmToggleSetting.style.display = 'none';
             lastfmLoveSetting.style.display = 'none';
+            lastfmCustomCredsToggleSetting.style.display = 'none';
+            lastfmCustomCredsSetting.style.display = 'none';
+            // Hide credential auth by default - only show on OAuth failure
+            hideCredentialAuth();
+        }
+    }
+
+    function showCredentialAuth() {
+        if (lastfmCredentialAuth) lastfmCredentialAuth.style.display = 'block';
+        if (lastfmCredentialForm) lastfmCredentialForm.style.display = 'block';
+        // Focus on username field
+        if (lastfmUsernameInput) lastfmUsernameInput.focus();
+    }
+
+    function hideCredentialAuth() {
+        if (lastfmCredentialAuth) lastfmCredentialAuth.style.display = 'none';
+        if (lastfmCredentialForm) lastfmCredentialForm.style.display = 'none';
+        if (lastfmUsernameInput) lastfmUsernameInput.value = '';
+        if (lastfmPasswordInput) lastfmPasswordInput.value = '';
+    }
+
+    function updateCustomCredsUI() {
+        const useCustom = lastFMStorage.useCustomCredentials();
+        lastfmCustomCredsSetting.style.display = useCustom ? 'flex' : 'none';
+
+        if (useCustom) {
+            lastfmCustomApiKey.value = lastFMStorage.getCustomApiKey();
+            lastfmCustomApiSecret.value = lastFMStorage.getCustomApiSecret();
+
+            const hasCreds = lastFMStorage.getCustomApiKey() && lastFMStorage.getCustomApiSecret();
+            lastfmClearCustomCreds.style.display = hasCreds ? 'inline-block' : 'none';
         }
     }
 
@@ -152,14 +219,27 @@ export function initializeSettings(scrobbler, player, api, ui) {
             return;
         }
 
-        const authWindow = window.open('', '_blank');
+        let authWindow = null;
+        if (!window.Neutralino) {
+            authWindow = window.open('', '_blank');
+        }
+
         lastfmConnectBtn.disabled = true;
         lastfmConnectBtn.textContent = 'Opening Last.fm...';
 
         try {
             const { token, url } = await scrobbler.lastfm.getAuthUrl();
 
-            if (authWindow) {
+            if (window.Neutralino) {
+                try {
+                    await Neutralino.os.open(url);
+                } catch (e) {
+                    // Fallback if os.open fails
+                    console.error('Neutralino open failed, falling back to window.open', e);
+                    if (!authWindow) authWindow = window.open(url, '_blank');
+                    else authWindow.location.href = url;
+                }
+            } else if (authWindow) {
                 authWindow.location.href = url;
             } else {
                 alert('Popup blocked! Please allow popups.');
@@ -171,17 +251,22 @@ export function initializeSettings(scrobbler, player, api, ui) {
             lastfmConnectBtn.textContent = 'Waiting for authorization...';
 
             let attempts = 0;
-            const maxAttempts = 30;
+            const maxAttempts = 5;
 
             const checkAuth = setInterval(async () => {
                 attempts++;
 
                 if (attempts > maxAttempts) {
                     clearInterval(checkAuth);
+                    if (authWindow && !authWindow.closed) authWindow.close();
                     lastfmConnectBtn.textContent = 'Connect Last.fm';
                     lastfmConnectBtn.disabled = false;
-                    if (authWindow && !authWindow.closed) authWindow.close();
-                    alert('Authorization timed out. Please try again.');
+                    // Ask user if they want to use credentials instead
+                    if (
+                        confirm('Authorization timed out. Would you like to login with username and password instead?')
+                    ) {
+                        showCredentialAuth();
+                    }
                     return;
                 }
 
@@ -191,11 +276,10 @@ export function initializeSettings(scrobbler, player, api, ui) {
                     if (result.success) {
                         clearInterval(checkAuth);
                         if (authWindow && !authWindow.closed) authWindow.close();
-                        updateLastFMUI();
-                        lastfmConnectBtn.disabled = false;
                         lastFMStorage.setEnabled(true);
                         lastfmToggle.checked = true;
-                        alert(`Successfully connected to Last.fm as ${result.username}!`);
+                        updateLastFMUI();
+                        lastfmConnectBtn.disabled = false;
                     }
                 } catch {
                     // Still waiting
@@ -203,10 +287,13 @@ export function initializeSettings(scrobbler, player, api, ui) {
             }, 2000);
         } catch (error) {
             console.error('Last.fm connection failed:', error);
-            alert('Failed to connect to Last.fm: ' + error.message);
+            if (authWindow && !authWindow.closed) authWindow.close();
             lastfmConnectBtn.textContent = 'Connect Last.fm';
             lastfmConnectBtn.disabled = false;
-            if (authWindow && !authWindow.closed) authWindow.close();
+            // Ask user if they want to use credentials instead
+            if (confirm('Failed to connect to Last.fm. Would you like to login with username and password instead?')) {
+                showCredentialAuth();
+            }
         }
     });
 
@@ -220,6 +307,118 @@ export function initializeSettings(scrobbler, player, api, ui) {
     if (lastfmLoveToggle) {
         lastfmLoveToggle.addEventListener('change', (e) => {
             lastFMStorage.setLoveOnLike(e.target.checked);
+        });
+    }
+
+    // Custom Credentials Toggle
+    if (lastfmCustomCredsToggle) {
+        lastfmCustomCredsToggle.addEventListener('change', (e) => {
+            lastFMStorage.setUseCustomCredentials(e.target.checked);
+            updateCustomCredsUI();
+
+            // Reload credentials in the scrobbler
+            scrobbler.lastfm.reloadCredentials();
+
+            // If credentials are being disabled, clear any existing session
+            if (!e.target.checked && scrobbler.lastfm.isAuthenticated()) {
+                scrobbler.lastfm.disconnect();
+                updateLastFMUI();
+                alert('Switched to default API credentials. Please reconnect to Last.fm.');
+            }
+        });
+    }
+
+    // Save Custom Credentials
+    if (lastfmSaveCustomCreds) {
+        lastfmSaveCustomCreds.addEventListener('click', () => {
+            const apiKey = lastfmCustomApiKey.value.trim();
+            const apiSecret = lastfmCustomApiSecret.value.trim();
+
+            if (!apiKey || !apiSecret) {
+                alert('Please enter both API Key and API Secret');
+                return;
+            }
+
+            lastFMStorage.setCustomApiKey(apiKey);
+            lastFMStorage.setCustomApiSecret(apiSecret);
+
+            // Reload credentials
+            scrobbler.lastfm.reloadCredentials();
+
+            updateCustomCredsUI();
+            alert('Custom API credentials saved! Please reconnect to Last.fm to use them.');
+
+            // Disconnect current session if authenticated
+            if (scrobbler.lastfm.isAuthenticated()) {
+                scrobbler.lastfm.disconnect();
+                updateLastFMUI();
+            }
+        });
+    }
+
+    // Clear Custom Credentials
+    if (lastfmClearCustomCreds) {
+        lastfmClearCustomCreds.addEventListener('click', () => {
+            if (confirm('Clear custom API credentials?')) {
+                lastFMStorage.clearCustomCredentials();
+                lastfmCustomApiKey.value = '';
+                lastfmCustomApiSecret.value = '';
+                lastfmCustomCredsToggle.checked = false;
+
+                // Reload credentials
+                scrobbler.lastfm.reloadCredentials();
+
+                updateCustomCredsUI();
+
+                // Disconnect current session if authenticated
+                if (scrobbler.lastfm.isAuthenticated()) {
+                    scrobbler.lastfm.disconnect();
+                    updateLastFMUI();
+                    alert(
+                        'Custom credentials cleared. Switched to default API credentials. Please reconnect to Last.fm.'
+                    );
+                }
+            }
+        });
+    }
+
+    // Last.fm Credential Auth - Login with credentials
+    if (lastfmLoginCredentialsBtn) {
+        lastfmLoginCredentialsBtn.addEventListener('click', async () => {
+            const username = lastfmUsernameInput?.value?.trim();
+            const password = lastfmPasswordInput?.value;
+
+            if (!username || !password) {
+                alert('Please enter both username and password.');
+                return;
+            }
+
+            lastfmLoginCredentialsBtn.disabled = true;
+            lastfmLoginCredentialsBtn.textContent = 'Logging in...';
+
+            try {
+                const result = await scrobbler.lastfm.authenticateWithCredentials(username, password);
+                if (result.success) {
+                    lastFMStorage.setEnabled(true);
+                    lastfmToggle.checked = true;
+                    updateLastFMUI();
+                    // Clear password for security
+                    if (lastfmPasswordInput) lastfmPasswordInput.value = '';
+                }
+            } catch (error) {
+                console.error('Last.fm credential login failed:', error);
+                alert('Failed to login: ' + error.message);
+            } finally {
+                lastfmLoginCredentialsBtn.disabled = false;
+                lastfmLoginCredentialsBtn.textContent = 'Login';
+            }
+        });
+    }
+
+    // Last.fm Credential Auth - Switch back to OAuth
+    if (lastfmUseOAuthBtn) {
+        lastfmUseOAuthBtn.addEventListener('click', () => {
+            hideCredentialAuth();
         });
     }
 
@@ -377,14 +576,20 @@ export function initializeSettings(scrobbler, player, api, ui) {
                 return;
             }
 
-            const authWindow = window.open('', '_blank');
+            let authWindow = null;
+            if (!window.Neutralino) {
+                authWindow = window.open('', '_blank');
+            }
+
             librefmConnectBtn.disabled = true;
             librefmConnectBtn.textContent = 'Opening Libre.fm...';
 
             try {
                 const { token, url } = await scrobbler.librefm.getAuthUrl();
 
-                if (authWindow) {
+                if (window.Neutralino) {
+                    await Neutralino.os.open(url);
+                } else if (authWindow) {
                     authWindow.location.href = url;
                 } else {
                     alert('Popup blocked! Please allow popups.');
@@ -416,10 +621,10 @@ export function initializeSettings(scrobbler, player, api, ui) {
                         if (result.success) {
                             clearInterval(checkAuth);
                             if (authWindow && !authWindow.closed) authWindow.close();
-                            updateLibreFmUI();
-                            librefmConnectBtn.disabled = false;
                             libreFmSettings.setEnabled(true);
                             librefmToggle.checked = true;
+                            updateLibreFmUI();
+                            librefmConnectBtn.disabled = false;
                             alert(`Successfully connected to Libre.fm as ${result.username}!`);
                         }
                     } catch {
@@ -511,6 +716,17 @@ export function initializeSettings(scrobbler, player, api, ui) {
         renderCustomThemeEditor();
     });
 
+    // Music Provider setting
+    const musicProviderSetting = document.getElementById('music-provider-setting');
+    if (musicProviderSetting) {
+        musicProviderSetting.value = musicProviderSettings.getProvider();
+        musicProviderSetting.addEventListener('change', (e) => {
+            musicProviderSettings.setProvider(e.target.value);
+            // Reload page to apply changes
+            window.location.reload();
+        });
+    }
+
     // Streaming Quality setting
     const streamingQualitySetting = document.getElementById('streaming-quality-setting');
     if (streamingQualitySetting) {
@@ -551,8 +767,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         showQualityBadgesToggle.checked = qualityBadgeSettings.isEnabled();
         showQualityBadgesToggle.addEventListener('change', (e) => {
             qualityBadgeSettings.setEnabled(e.target.checked);
-            // Re-render to reflect changes
-            ui.renderLibraryPage();
+            // Re-render queue if available, but don't force navigation to library
             if (window.renderQueueFunction) window.renderQueueFunction();
         });
     }
@@ -593,14 +808,174 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
+    // Mono Audio Toggle
+    const monoAudioToggle = document.getElementById('mono-audio-toggle');
+    if (monoAudioToggle) {
+        monoAudioToggle.checked = monoAudioSettings.isEnabled();
+        monoAudioToggle.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            monoAudioSettings.setEnabled(enabled);
+            audioContextManager.toggleMonoAudio(enabled);
+        });
+    }
+
+    // Exponential Volume Toggle
+    const exponentialVolumeToggle = document.getElementById('exponential-volume-toggle');
+    if (exponentialVolumeToggle) {
+        exponentialVolumeToggle.checked = exponentialVolumeSettings.isEnabled();
+        exponentialVolumeToggle.addEventListener('change', (e) => {
+            exponentialVolumeSettings.setEnabled(e.target.checked);
+            // Re-apply current volume to use new curve
+            player.applyReplayGain();
+        });
+    }
+
     // ========================================
-    // 16-Band Equalizer Settings
+    // Audio Effects (Playback Speed)
+    // ========================================
+    const playbackSpeedSlider = document.getElementById('playback-speed-slider');
+    const playbackSpeedInput = document.getElementById('playback-speed-input');
+    if (playbackSpeedSlider && playbackSpeedInput) {
+        const currentSpeed = audioEffectsSettings.getSpeed();
+        // Clamp slider to its range (0.25-4), but show actual value in input
+        playbackSpeedSlider.value = Math.max(0.25, Math.min(4.0, currentSpeed));
+        playbackSpeedInput.value = currentSpeed;
+
+        // Slider only controls 0.25-4 range
+        playbackSpeedSlider.addEventListener('input', (e) => {
+            const speed = parseFloat(e.target.value) || 1.0;
+            playbackSpeedInput.value = speed;
+            player.setPlaybackSpeed(speed);
+        });
+
+        // Input allows full 0.01-100 range
+        const handleInputChange = () => {
+            const speed = parseFloat(playbackSpeedInput.value) || 1.0;
+            const validSpeed = Math.max(0.01, Math.min(100, speed));
+            playbackSpeedInput.value = validSpeed;
+            // Only update slider if value is within slider range
+            if (validSpeed >= 0.25 && validSpeed <= 4.0) {
+                playbackSpeedSlider.value = validSpeed;
+            }
+            player.setPlaybackSpeed(validSpeed);
+        };
+
+        playbackSpeedInput.addEventListener('change', handleInputChange);
+        playbackSpeedInput.addEventListener('blur', handleInputChange);
+    }
+
+    // ========================================
+    // Parametric Equalizer Settings (3-32 bands with custom ranges)
     // ========================================
     const eqToggle = document.getElementById('equalizer-enabled-toggle');
     const eqContainer = document.getElementById('equalizer-container');
     const eqPresetSelect = document.getElementById('equalizer-preset-select');
     const eqResetBtn = document.getElementById('equalizer-reset-btn');
-    const eqBands = document.querySelectorAll('.eq-band');
+    const eqBandsContainer = document.getElementById('equalizer-bands');
+    const customPresetsOptgroup = document.getElementById('custom-presets-optgroup');
+    const customPresetNameInput = document.getElementById('custom-preset-name');
+    const saveCustomPresetBtn = document.getElementById('save-custom-preset-btn');
+    const deleteCustomPresetBtn = document.getElementById('delete-custom-preset-btn');
+    const eqBandCountInput = document.getElementById('eq-band-count');
+    const eqRangeMinInput = document.getElementById('eq-range-min');
+    const eqRangeMaxInput = document.getElementById('eq-range-max');
+    const applyEqRangeBtn = document.getElementById('apply-eq-range-btn');
+    const eqFreqMinInput = document.getElementById('eq-freq-min');
+    const eqFreqMaxInput = document.getElementById('eq-freq-max');
+    const applyEqFreqBtn = document.getElementById('apply-eq-freq-btn');
+    const resetEqFreqBtn = document.getElementById('reset-eq-freq-btn');
+    const resetEqRangeBtn = document.getElementById('reset-eq-range-btn');
+    const eqScaleContainer = document.querySelector('.equalizer-scale');
+    const eqPreampSlider = document.getElementById('eq-preamp-slider');
+    const eqPreampInput = document.getElementById('eq-preamp-input');
+    const eqExportBtn = document.getElementById('eq-export-btn');
+    const eqImportBtn = document.getElementById('eq-import-btn');
+    const eqImportFile = document.getElementById('eq-import-file');
+
+    // Current settings
+    let currentBandCount = equalizerSettings.getBandCount();
+    let currentRange = equalizerSettings.getRange();
+    let currentFreqRange = equalizerSettings.getFreqRange();
+    let currentPreamp = equalizerSettings.getPreamp();
+
+    /**
+     * Generate frequency labels for given band count and frequency range
+     */
+    const generateFreqLabels = (count, minFreq = currentFreqRange.min, maxFreq = currentFreqRange.max) => {
+        const labels = [];
+        const safeMin = Math.max(10, minFreq);
+        const safeMax = Math.min(96000, maxFreq);
+
+        for (let i = 0; i < count; i++) {
+            const t = i / (count - 1);
+            const freq = safeMin * Math.pow(safeMax / safeMin, t);
+            const rounded = Math.round(freq);
+
+            if (rounded < 1000) {
+                labels.push(rounded.toString());
+            } else if (rounded < 10000) {
+                labels.push((rounded / 1000).toFixed(rounded % 1000 === 0 ? 0 : 1) + 'K');
+            } else {
+                labels.push((rounded / 1000).toFixed(0) + 'K');
+            }
+        }
+
+        return labels;
+    };
+
+    /**
+     * Generate EQ bands HTML
+     */
+    const generateEQBands = (
+        count,
+        rangeMin = currentRange.min,
+        rangeMax = currentRange.max,
+        freqMin = currentFreqRange.min,
+        freqMax = currentFreqRange.max
+    ) => {
+        if (!eqBandsContainer) return;
+
+        const labels = generateFreqLabels(count, freqMin, freqMax);
+        eqBandsContainer.innerHTML = '';
+
+        for (let i = 0; i < count; i++) {
+            const bandEl = document.createElement('div');
+            bandEl.className = 'eq-band';
+            bandEl.dataset.band = i;
+
+            bandEl.innerHTML = `
+                <input
+                    type="range"
+                    class="eq-slider"
+                    min="${rangeMin}"
+                    max="${rangeMax}"
+                    step="0.5"
+                    value="0"
+                    orient="vertical"
+                />
+                <span class="eq-value">0</span>
+                <span class="eq-freq">${labels[i]}</span>
+            `;
+
+            eqBandsContainer.appendChild(bandEl);
+        }
+
+        // Re-initialize band sliders
+        initializeBandSliders();
+    };
+
+    /**
+     * Update EQ scale display
+     */
+    const updateEQScale = (min, max) => {
+        if (!eqScaleContainer) return;
+        const spans = eqScaleContainer.querySelectorAll('span');
+        if (spans.length >= 3) {
+            spans[0].textContent = `+${max} dB`;
+            spans[1].textContent = '0 dB';
+            spans[2].textContent = `${min} dB`;
+        }
+    };
 
     /**
      * Update the visual display of a band value
@@ -625,6 +1000,9 @@ export function initializeSettings(scrobbler, player, api, ui) {
      * Update all band sliders and displays from an array of gains
      */
     const updateAllBandUI = (gains) => {
+        const eqBands = eqBandsContainer?.querySelectorAll('.eq-band');
+        if (!eqBands) return;
+
         eqBands.forEach((bandEl, index) => {
             const slider = bandEl.querySelector('.eq-slider');
             if (slider && gains[index] !== undefined) {
@@ -632,6 +1010,9 @@ export function initializeSettings(scrobbler, player, api, ui) {
                 updateBandValueDisplay(bandEl, gains[index]);
             }
         });
+
+        // Redraw the EQ curve after updating all bands
+        drawEQCurve();
     };
 
     /**
@@ -640,51 +1021,215 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const updateEQContainerVisibility = (enabled) => {
         if (eqContainer) {
             eqContainer.style.display = enabled ? 'block' : 'none';
+            if (enabled) {
+                // Redraw curve when container becomes visible
+                requestAnimationFrame(drawEQCurve);
+            }
         }
     };
 
-    // Initialize EQ toggle
-    if (eqToggle) {
-        const isEnabled = equalizerSettings.isEnabled();
-        eqToggle.checked = isEnabled;
-        updateEQContainerVisibility(isEnabled);
+    /**
+     * Populate custom presets in the dropdown
+     */
+    const populateCustomPresets = () => {
+        if (!customPresetsOptgroup) return;
 
-        eqToggle.addEventListener('change', (e) => {
-            const enabled = e.target.checked;
-            audioContextManager.toggleEQ(enabled);
-            updateEQContainerVisibility(enabled);
+        // Clear existing custom presets
+        customPresetsOptgroup.innerHTML = '';
+
+        const customPresets = equalizerSettings.getCustomPresets();
+        const presetIds = Object.keys(customPresets);
+
+        if (presetIds.length === 0) {
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = 'No custom presets saved';
+            emptyOption.disabled = true;
+            customPresetsOptgroup.appendChild(emptyOption);
+        } else {
+            presetIds.forEach((presetId) => {
+                const preset = customPresets[presetId];
+                const option = document.createElement('option');
+                option.value = presetId;
+                option.textContent = preset.name;
+                customPresetsOptgroup.appendChild(option);
+            });
+        }
+    };
+
+    /**
+     * Check if a preset ID is a custom preset
+     */
+    const isCustomPreset = (presetId) => {
+        return presetId && presetId.startsWith('custom_');
+    };
+
+    /**
+     * Update delete button visibility based on selected preset
+     */
+    const updateDeleteButtonVisibility = () => {
+        if (!deleteCustomPresetBtn || !eqPresetSelect) return;
+        const isCustom = isCustomPreset(eqPresetSelect.value);
+        deleteCustomPresetBtn.style.display = isCustom ? 'flex' : 'none';
+    };
+
+    /**
+     * Draw smooth EQ response curve on canvas
+     */
+    const drawEQCurve = () => {
+        const canvas = document.getElementById('eq-response-canvas');
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+
+        // Skip if canvas has no size (not visible yet)
+        if (rect.width === 0 || rect.height === 0) return;
+
+        // Set canvas size accounting for DPR
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+
+        const width = rect.width;
+        const height = rect.height;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Get all current gain values
+        const eqBands = eqBandsContainer?.querySelectorAll('.eq-band');
+        if (!eqBands || eqBands.length === 0) return;
+
+        // Get the actual highlight color from CSS
+        const tempEl = document.createElement('div');
+        tempEl.style.color = 'rgb(var(--highlight-rgb))';
+        document.body.appendChild(tempEl);
+        const highlightColor = getComputedStyle(tempEl).color;
+        document.body.removeChild(tempEl);
+
+        const gains = [];
+        const positions = [];
+        const range = currentRange;
+        const rangeTotal = range.max - range.min;
+        const canvasRect = canvas.getBoundingClientRect();
+
+        eqBands.forEach((bandEl) => {
+            const slider = bandEl.querySelector('.eq-slider');
+            const gain = slider ? parseFloat(slider.value) : 0;
+            gains.push(gain);
+
+            // Get actual center position of the band element relative to canvas
+            const bandRect = bandEl.getBoundingClientRect();
+            const x = bandRect.left + bandRect.width / 2 - canvasRect.left;
+            positions.push(x);
         });
-    }
 
-    // Initialize preset selector
-    if (eqPresetSelect) {
-        eqPresetSelect.value = equalizerSettings.getPreset();
+        // Calculate y positions - account for slider thumb size (18px)
+        // The track is 120px, but thumb center moves within (120 - 18) = 102px range
+        const trackHeight = height;
+        const thumbSize = 18;
+        const usableTrack = trackHeight - thumbSize;
+        const trackOffset = thumbSize / 2;
 
-        eqPresetSelect.addEventListener('change', (e) => {
-            const presetKey = e.target.value;
-            const preset = EQ_PRESETS[presetKey];
+        const getY = (gain) => {
+            const normalized = (gain - range.min) / rangeTotal;
+            // Invert because canvas Y=0 is at top, slider max is at top
+            return trackOffset + (1 - normalized) * usableTrack;
+        };
 
-            if (preset) {
-                audioContextManager.applyPreset(presetKey);
-                updateAllBandUI(preset.gains);
-            }
+        // Create points array
+        const points = gains.map((gain, i) => ({
+            x: positions[i],
+            y: getY(gain),
+        }));
+
+        if (points.length < 2) return;
+
+        // Parse RGB values from color string
+        const rgbMatch = highlightColor.match(/\d+/g);
+        const r = rgbMatch ? parseInt(rgbMatch[0]) : 128;
+        const g = rgbMatch ? parseInt(rgbMatch[1]) : 128;
+        const b = rgbMatch ? parseInt(rgbMatch[2]) : 128;
+
+        // Calculate control points for smooth curve
+        const getControlPoints = (i) => {
+            const p0 = points[i === 0 ? i : i - 1];
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const p3 = points[i + 2] || p2;
+
+            const cp1x = p1.x + (p2.x - p0.x) / 6;
+            const cp1y = p1.y + (p2.y - p0.y) / 6;
+            const cp2x = p2.x - (p3.x - p1.x) / 6;
+            const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+            return { cp1x, cp1y, cp2x, cp2y };
+        };
+
+        // Draw filled area from curve to bottom
+        const gradient = ctx.createLinearGradient(0, 0, 0, height);
+        gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.3)`);
+        gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0.05)`);
+
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, height);
+        ctx.lineTo(points[0].x, points[0].y);
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const { cp1x, cp1y, cp2x, cp2y } = getControlPoints(i);
+            const p2 = points[i + 1];
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+        }
+
+        ctx.lineTo(points[points.length - 1].x, height);
+        ctx.closePath();
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        // Draw the curve line
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const { cp1x, cp1y, cp2x, cp2y } = getControlPoints(i);
+            const p2 = points[i + 1];
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+        }
+
+        ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+
+        // Draw dots at each band point
+        points.forEach((point) => {
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            ctx.fill();
+
+            // Add white center to dots for visibility
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            ctx.fill();
         });
-    }
+    };
 
-    // Initialize reset button
-    if (eqResetBtn) {
-        eqResetBtn.addEventListener('click', () => {
-            audioContextManager.reset();
-            updateAllBandUI(new Array(16).fill(0));
-            if (eqPresetSelect) {
-                eqPresetSelect.value = 'flat';
-            }
-        });
-    }
+    /**
+     * Initialize band slider event listeners
+     */
+    const initializeBandSliders = () => {
+        const eqBands = eqBandsContainer?.querySelectorAll('.eq-band');
+        if (!eqBands || eqBands.length === 0) return;
 
-    // Initialize all band sliders
-    if (eqBands.length > 0) {
-        const savedGains = equalizerSettings.getGains();
+        const savedGains = equalizerSettings.getGains(currentBandCount);
+
+        // FL Studio-style absolute position drag state
+        let isDragging = false;
 
         eqBands.forEach((bandEl) => {
             const bandIndex = parseInt(bandEl.dataset.band, 10);
@@ -701,17 +1246,17 @@ export function initializeSettings(scrobbler, player, api, ui) {
                     const gain = parseFloat(e.target.value);
                     audioContextManager.setBandGain(bandIndex, gain);
                     updateBandValueDisplay(bandEl, gain);
+                    drawEQCurve();
 
-                    // When manually adjusting, switch preset to 'flat' (custom)
-                    // to indicate the user has made custom changes
+                    // When manually adjusting, check if we should clear preset
                     if (eqPresetSelect && eqPresetSelect.value !== 'flat') {
-                        // Check if current gains still match the selected preset
-                        const currentPreset = EQ_PRESETS[eqPresetSelect.value];
+                        const currentGains = audioContextManager.getGains();
+                        const builtInPresets = EQ_PRESETS;
+                        const currentPreset = builtInPresets[eqPresetSelect.value];
                         if (currentPreset) {
-                            const currentGains = audioContextManager.getGains();
                             const matches = currentPreset.gains.every((g, i) => Math.abs(g - currentGains[i]) < 0.01);
                             if (!matches) {
-                                // Don't change the select, but the preset will save as 'custom'
+                                // User has deviated from preset
                             }
                         }
                     }
@@ -722,8 +1267,637 @@ export function initializeSettings(scrobbler, player, api, ui) {
                     slider.value = 0;
                     audioContextManager.setBandGain(bandIndex, 0);
                     updateBandValueDisplay(bandEl, 0);
+                    drawEQCurve();
+                });
+
+                // FL Studio-style absolute drag: mousedown starts drag mode
+                bandEl.addEventListener('mousedown', (e) => {
+                    // Only handle left mouse button
+                    if (e.button !== 0) return;
+
+                    isDragging = true;
+                    document.body.style.cursor = 'ns-resize';
+                    e.preventDefault();
                 });
             }
+        });
+
+        // Global mousemove: whichever band is under cursor, set slider to cursor Y position
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+
+            // Find which band is under the cursor
+            const elementUnderCursor = document.elementFromPoint(e.clientX, e.clientY);
+            const bandUnderCursor = elementUnderCursor?.closest('.eq-band');
+
+            if (bandUnderCursor) {
+                const slider = bandUnderCursor.querySelector('.eq-slider');
+
+                if (slider) {
+                    const rect = slider.getBoundingClientRect();
+                    const min = parseFloat(slider.min);
+                    const max = parseFloat(slider.max);
+                    const step = parseFloat(slider.step) || 0.5;
+
+                    // Calculate relative Y position within slider (0 = bottom, 1 = top)
+                    const relativeY = (rect.bottom - e.clientY) / rect.height;
+                    const clampedY = Math.max(0, Math.min(1, relativeY));
+
+                    // Map to slider value range
+                    let newValue = min + clampedY * (max - min);
+
+                    // Round to step
+                    newValue = Math.round(newValue / step) * step;
+
+                    // Only update if value changed
+                    if (parseFloat(slider.value) !== newValue) {
+                        slider.value = newValue;
+                        const bandIndex = parseInt(bandUnderCursor.dataset.band, 10);
+                        audioContextManager.setBandGain(bandIndex, newValue);
+                        updateBandValueDisplay(bandUnderCursor, newValue);
+                        drawEQCurve();
+                    }
+                }
+            }
+        });
+
+        // Global mouseup: stop dragging
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                document.body.style.cursor = '';
+            }
+        });
+
+        // Initial curve draw with delay to ensure canvas has proper dimensions
+        setTimeout(() => {
+            drawEQCurve();
+        }, 100);
+    };
+
+    // Initialize EQ toggle
+    if (eqToggle) {
+        const isEnabled = equalizerSettings.isEnabled();
+        eqToggle.checked = isEnabled;
+        updateEQContainerVisibility(isEnabled);
+
+        eqToggle.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            audioContextManager.toggleEQ(enabled);
+            updateEQContainerVisibility(enabled);
+
+            // Redraw curve after a brief delay to allow container to become visible
+            if (enabled) {
+                setTimeout(() => {
+                    drawEQCurve();
+                }, 50);
+            }
+        });
+    }
+
+    // Initialize band count input
+    if (eqBandCountInput) {
+        eqBandCountInput.value = currentBandCount;
+
+        eqBandCountInput.addEventListener('change', (e) => {
+            const newCount = parseInt(e.target.value, 10);
+            if (newCount >= equalizerSettings.MIN_BANDS && newCount <= equalizerSettings.MAX_BANDS) {
+                currentBandCount = newCount;
+
+                // Save new band count and update audio context (interpolates gains automatically)
+                equalizerSettings.setBandCount(newCount);
+                audioContextManager.setBandCount?.(newCount);
+
+                // Regenerate UI
+                generateEQBands(
+                    newCount,
+                    currentRange.min,
+                    currentRange.max,
+                    currentFreqRange.min,
+                    currentFreqRange.max
+                );
+
+                // Get interpolated gains from audio context
+                const interpolatedGains = audioContextManager.getGains?.() || equalizerSettings.getGains(newCount);
+                updateAllBandUI(interpolatedGains);
+
+                // Keep current preset or set to custom if modified
+                if (eqPresetSelect) {
+                    const currentPreset = eqPresetSelect.value;
+                    if (!currentPreset.startsWith('custom_')) {
+                        eqPresetSelect.value = 'custom';
+                    }
+                }
+                updateDeleteButtonVisibility();
+
+                // Show brief feedback
+                const originalText = eqBandCountInput.style.backgroundColor;
+                eqBandCountInput.style.backgroundColor = 'var(--highlight)';
+                setTimeout(() => {
+                    eqBandCountInput.style.backgroundColor = originalText;
+                }, 300);
+            }
+        });
+    }
+
+    // Initialize preset selector
+    if (eqPresetSelect) {
+        populateCustomPresets();
+        eqPresetSelect.value = equalizerSettings.getPreset();
+        updateDeleteButtonVisibility();
+
+        eqPresetSelect.addEventListener('change', (e) => {
+            const presetKey = e.target.value;
+
+            // Check if it's a custom preset
+            if (isCustomPreset(presetKey)) {
+                const customPresets = equalizerSettings.getCustomPresets();
+                const customPreset = customPresets[presetKey];
+                if (customPreset && customPreset.gains) {
+                    // Check if preset has different band count
+                    const presetBands = customPreset.bandCount || customPreset.gains.length;
+                    if (presetBands !== currentBandCount) {
+                        // Update band count to match preset
+                        currentBandCount = presetBands;
+                        equalizerSettings.setBandCount(presetBands);
+                        if (eqBandCountInput) eqBandCountInput.value = presetBands;
+                        generateEQBands(
+                            presetBands,
+                            currentRange.min,
+                            currentRange.max,
+                            currentFreqRange.min,
+                            currentFreqRange.max
+                        );
+                    }
+                    audioContextManager.setAllGains(customPreset.gains);
+                    updateAllBandUI(customPreset.gains);
+                    equalizerSettings.setPreset(presetKey);
+                }
+            } else {
+                // Built-in preset - use current band count
+                const presets = EQ_PRESETS;
+                const preset = presets[presetKey];
+                if (preset) {
+                    audioContextManager.applyPreset(presetKey);
+                    updateAllBandUI(preset.gains);
+                }
+            }
+            updateDeleteButtonVisibility();
+        });
+    }
+
+    // Initialize reset button
+    if (eqResetBtn) {
+        eqResetBtn.addEventListener('click', () => {
+            audioContextManager.reset();
+            updateAllBandUI(new Array(currentBandCount).fill(0));
+            if (eqPresetSelect) {
+                eqPresetSelect.value = 'flat';
+                updateDeleteButtonVisibility();
+            }
+        });
+    }
+
+    // Initialize save custom preset button
+    if (saveCustomPresetBtn && customPresetNameInput) {
+        saveCustomPresetBtn.addEventListener('click', () => {
+            const name = customPresetNameInput.value.trim();
+            if (!name) {
+                alert('Please enter a name for your preset');
+                return;
+            }
+
+            const currentGains = audioContextManager.getGains();
+            const presetId = equalizerSettings.saveCustomPreset(name, currentGains);
+
+            if (presetId) {
+                populateCustomPresets();
+                if (eqPresetSelect) {
+                    eqPresetSelect.value = presetId;
+                    equalizerSettings.setPreset(presetId);
+                    updateDeleteButtonVisibility();
+                }
+                customPresetNameInput.value = '';
+
+                // Show feedback
+                const originalText = saveCustomPresetBtn.textContent;
+                saveCustomPresetBtn.textContent = 'Saved!';
+                setTimeout(() => {
+                    saveCustomPresetBtn.textContent = originalText;
+                }, 1500);
+            } else {
+                alert('Failed to save preset. Please try again.');
+            }
+        });
+
+        // Allow saving with Enter key
+        customPresetNameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                saveCustomPresetBtn.click();
+            }
+        });
+    }
+
+    // Initialize delete custom preset button
+    if (deleteCustomPresetBtn) {
+        deleteCustomPresetBtn.addEventListener('click', () => {
+            if (!eqPresetSelect) return;
+
+            const presetId = eqPresetSelect.value;
+            if (!isCustomPreset(presetId)) return;
+
+            const customPresets = equalizerSettings.getCustomPresets();
+            const presetName = customPresets[presetId]?.name || 'this preset';
+
+            if (confirm(`Are you sure you want to delete "${presetName}"?`)) {
+                const success = equalizerSettings.deleteCustomPreset(presetId);
+                if (success) {
+                    populateCustomPresets();
+                    eqPresetSelect.value = 'flat';
+                    audioContextManager.reset();
+                    updateAllBandUI(new Array(currentBandCount).fill(0));
+                    equalizerSettings.setPreset('flat');
+                    updateDeleteButtonVisibility();
+                } else {
+                    alert('Failed to delete preset. Please try again.');
+                }
+            }
+        });
+    }
+
+    // Initialize range inputs
+    if (eqRangeMinInput) {
+        eqRangeMinInput.value = currentRange.min;
+    }
+    if (eqRangeMaxInput) {
+        eqRangeMaxInput.value = currentRange.max;
+    }
+    updateEQScale(currentRange.min, currentRange.max);
+
+    // Initialize apply range button
+    if (applyEqRangeBtn && eqRangeMinInput && eqRangeMaxInput) {
+        applyEqRangeBtn.addEventListener('click', () => {
+            const newMin = parseInt(eqRangeMinInput.value, 10);
+            const newMax = parseInt(eqRangeMaxInput.value, 10);
+
+            // Validate range
+            if (isNaN(newMin) || isNaN(newMax)) {
+                alert('Please enter valid numbers for the range');
+                return;
+            }
+
+            if (newMin >= 0 || newMax <= 0) {
+                alert('Minimum must be negative and maximum must be positive');
+                return;
+            }
+
+            if (newMin < equalizerSettings.ABSOLUTE_MIN || newMax > equalizerSettings.ABSOLUTE_MAX) {
+                alert(
+                    `Range must be between ${equalizerSettings.ABSOLUTE_MIN} and ${equalizerSettings.ABSOLUTE_MAX} dB`
+                );
+                return;
+            }
+
+            // Save new range
+            equalizerSettings.setRange(newMin, newMax);
+            currentRange = { min: newMin, max: newMax };
+
+            // Regenerate bands with new range
+            generateEQBands(currentBandCount, newMin, newMax);
+
+            // Update scale display
+            updateEQScale(newMin, newMax);
+
+            // Reset gains to flat
+            const flatGains = new Array(currentBandCount).fill(0);
+            audioContextManager.setAllGains(flatGains);
+            updateAllBandUI(flatGains);
+
+            // Reset to flat preset
+            if (eqPresetSelect) {
+                eqPresetSelect.value = 'flat';
+                equalizerSettings.setPreset('flat');
+            }
+
+            // Show feedback
+            const originalText = applyEqRangeBtn.textContent;
+            applyEqRangeBtn.textContent = 'Applied!';
+            setTimeout(() => {
+                applyEqRangeBtn.textContent = originalText;
+            }, 1500);
+        });
+    }
+
+    // Initialize reset DB range button
+    if (resetEqRangeBtn) {
+        resetEqRangeBtn.addEventListener('click', () => {
+            // Reset to default values
+            const defaultMin = equalizerSettings.DEFAULT_RANGE_MIN;
+            const defaultMax = equalizerSettings.DEFAULT_RANGE_MAX;
+
+            // Update inputs
+            if (eqRangeMinInput) eqRangeMinInput.value = defaultMin;
+            if (eqRangeMaxInput) eqRangeMaxInput.value = defaultMax;
+
+            // Save new range
+            equalizerSettings.setRange(defaultMin, defaultMax);
+            currentRange = { min: defaultMin, max: defaultMax };
+
+            // Regenerate bands with new range
+            generateEQBands(currentBandCount, defaultMin, defaultMax, currentFreqRange.min, currentFreqRange.max);
+
+            // Update scale display
+            updateEQScale(defaultMin, defaultMax);
+
+            // Reset gains to flat
+            const flatGains = new Array(currentBandCount).fill(0);
+            audioContextManager.setAllGains(flatGains);
+            updateAllBandUI(flatGains);
+
+            // Reset to flat preset
+            if (eqPresetSelect) {
+                eqPresetSelect.value = 'flat';
+                equalizerSettings.setPreset('flat');
+            }
+
+            // Show feedback
+            const originalText = resetEqRangeBtn.textContent;
+            resetEqRangeBtn.textContent = 'Reset!';
+            setTimeout(() => {
+                resetEqRangeBtn.textContent = originalText;
+            }, 1500);
+        });
+    }
+
+    // Initialize frequency range inputs
+    if (eqFreqMinInput) {
+        eqFreqMinInput.value = currentFreqRange.min;
+    }
+    if (eqFreqMaxInput) {
+        eqFreqMaxInput.value = currentFreqRange.max;
+    }
+
+    // Initialize apply frequency range button
+    if (applyEqFreqBtn && eqFreqMinInput && eqFreqMaxInput) {
+        applyEqFreqBtn.addEventListener('click', () => {
+            const newMin = parseInt(eqFreqMinInput.value, 10);
+            const newMax = parseInt(eqFreqMaxInput.value, 10);
+
+            // Validate range
+            if (isNaN(newMin) || isNaN(newMax)) {
+                alert('Please enter valid numbers for the frequency range');
+                return;
+            }
+
+            if (newMin < equalizerSettings.ABSOLUTE_FREQ_MIN || newMax > equalizerSettings.ABSOLUTE_FREQ_MAX) {
+                alert(
+                    `Frequency range must be between ${equalizerSettings.ABSOLUTE_FREQ_MIN} Hz and ${equalizerSettings.ABSOLUTE_FREQ_MAX} Hz`
+                );
+                return;
+            }
+
+            if (newMin >= newMax) {
+                alert('Minimum frequency must be less than maximum frequency');
+                return;
+            }
+
+            // Save new frequency range
+            equalizerSettings.setFreqRange(newMin, newMax);
+            currentFreqRange = { min: newMin, max: newMax };
+
+            // Update audio context
+            audioContextManager.setFreqRange(newMin, newMax);
+
+            // Regenerate bands with new frequency range
+            generateEQBands(currentBandCount, currentRange.min, currentRange.max, newMin, newMax);
+
+            // Reset gains to flat
+            const flatGains = new Array(currentBandCount).fill(0);
+            audioContextManager.setAllGains(flatGains);
+            updateAllBandUI(flatGains);
+
+            // Reset to flat preset
+            if (eqPresetSelect) {
+                eqPresetSelect.value = 'flat';
+                equalizerSettings.setPreset('flat');
+            }
+
+            // Show feedback
+            const originalText = applyEqFreqBtn.textContent;
+            applyEqFreqBtn.textContent = 'Applied!';
+            setTimeout(() => {
+                applyEqFreqBtn.textContent = originalText;
+            }, 1500);
+        });
+    }
+
+    // Initialize reset frequency range button
+    if (resetEqFreqBtn) {
+        resetEqFreqBtn.addEventListener('click', () => {
+            // Reset to default values
+            const defaultMin = equalizerSettings.DEFAULT_FREQ_MIN;
+            const defaultMax = equalizerSettings.DEFAULT_FREQ_MAX;
+
+            // Update inputs
+            if (eqFreqMinInput) eqFreqMinInput.value = defaultMin;
+            if (eqFreqMaxInput) eqFreqMaxInput.value = defaultMax;
+
+            // Save new frequency range
+            equalizerSettings.setFreqRange(defaultMin, defaultMax);
+            currentFreqRange = { min: defaultMin, max: defaultMax };
+
+            // Update audio context
+            audioContextManager.setFreqRange(defaultMin, defaultMax);
+
+            // Regenerate bands with new frequency range
+            generateEQBands(currentBandCount, currentRange.min, currentRange.max, defaultMin, defaultMax);
+
+            // Reset gains to flat
+            const flatGains = new Array(currentBandCount).fill(0);
+            audioContextManager.setAllGains(flatGains);
+            updateAllBandUI(flatGains);
+
+            // Reset to flat preset
+            if (eqPresetSelect) {
+                eqPresetSelect.value = 'flat';
+                equalizerSettings.setPreset('flat');
+            }
+
+            // Show feedback
+            const originalText = resetEqFreqBtn.textContent;
+            resetEqFreqBtn.textContent = 'Reset!';
+            setTimeout(() => {
+                resetEqFreqBtn.textContent = originalText;
+            }, 1500);
+        });
+    }
+
+    // Initialize preamp control
+    const updatePreampUI = (value) => {
+        currentPreamp = value;
+        if (eqPreampSlider) eqPreampSlider.value = value;
+        if (eqPreampInput) eqPreampInput.value = value;
+        audioContextManager.setPreamp?.(value);
+    };
+
+    if (eqPreampSlider) {
+        // Set initial value
+        eqPreampSlider.value = currentPreamp;
+
+        // Handle slider input
+        eqPreampSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            updatePreampUI(value);
+        });
+    }
+
+    if (eqPreampInput) {
+        // Set initial value
+        eqPreampInput.value = currentPreamp;
+
+        // Handle text input
+        eqPreampInput.addEventListener('change', (e) => {
+            let value = parseFloat(e.target.value);
+            // Clamp to valid range
+            value = Math.max(-20, Math.min(20, value || 0));
+            updatePreampUI(value);
+        });
+
+        // Handle enter key
+        eqPreampInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.target.blur();
+            }
+        });
+    }
+
+    // Initialize import/export controls
+    if (eqExportBtn) {
+        eqExportBtn.addEventListener('click', () => {
+            const text = audioContextManager.exportEQToText?.();
+            if (text) {
+                navigator.clipboard
+                    .writeText(text)
+                    .then(() => {
+                        eqExportBtn.textContent = 'Copied!';
+                        setTimeout(() => {
+                            eqExportBtn.textContent = 'Export';
+                        }, 1500);
+                    })
+                    .catch(() => {
+                        // Fallback: create and download file
+                        const blob = new Blob([text], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'equalizer-settings.txt';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    });
+            }
+        });
+    }
+
+    if (eqImportBtn && eqImportFile) {
+        eqImportBtn.addEventListener('click', () => {
+            eqImportFile.click();
+        });
+
+        eqImportFile.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const text = event.target.result;
+                const success = audioContextManager.importEQFromText?.(text);
+                if (success) {
+                    // Update UI
+                    currentPreamp = equalizerSettings.getPreamp();
+                    updatePreampUI(currentPreamp);
+
+                    // Update band count if changed
+                    currentBandCount = equalizerSettings.getBandCount();
+                    if (eqBandCountInput) eqBandCountInput.value = currentBandCount;
+
+                    // Regenerate bands and update UI
+                    generateEQBands(
+                        currentBandCount,
+                        currentRange.min,
+                        currentRange.max,
+                        currentFreqRange.min,
+                        currentFreqRange.max
+                    );
+                    const gains = audioContextManager.getGains?.() || equalizerSettings.getGains(currentBandCount);
+                    updateAllBandUI(gains);
+
+                    eqImportBtn.textContent = 'Imported!';
+                    setTimeout(() => {
+                        eqImportBtn.textContent = 'Import';
+                    }, 1500);
+                } else {
+                    eqImportBtn.textContent = 'Invalid!';
+                    setTimeout(() => {
+                        eqImportBtn.textContent = 'Import';
+                    }, 1500);
+                }
+            };
+            reader.readAsText(file);
+
+            // Reset file input
+            e.target.value = '';
+        });
+    }
+
+    // Generate initial EQ bands with current ranges
+    generateEQBands(currentBandCount, currentRange.min, currentRange.max, currentFreqRange.min, currentFreqRange.max);
+
+    // Listen for band count changes from other sources
+    window.addEventListener('equalizer-band-count-changed', (e) => {
+        if (e.detail && e.detail.bandCount) {
+            currentBandCount = e.detail.bandCount;
+            if (eqBandCountInput) eqBandCountInput.value = currentBandCount;
+            generateEQBands(
+                currentBandCount,
+                currentRange.min,
+                currentRange.max,
+                currentFreqRange.min,
+                currentFreqRange.max
+            );
+        }
+    });
+
+    // Listen for frequency range changes from other sources
+    window.addEventListener('equalizer-freq-range-changed', (e) => {
+        if (e.detail && e.detail.min !== undefined && e.detail.max !== undefined) {
+            currentFreqRange = { min: e.detail.min, max: e.detail.max };
+            if (eqFreqMinInput) eqFreqMinInput.value = currentFreqRange.min;
+            if (eqFreqMaxInput) eqFreqMaxInput.value = currentFreqRange.max;
+            generateEQBands(
+                currentBandCount,
+                currentRange.min,
+                currentRange.max,
+                currentFreqRange.min,
+                currentFreqRange.max
+            );
+        }
+    });
+
+    // Redraw EQ curve on window resize
+    window.addEventListener('resize', () => {
+        requestAnimationFrame(drawEQCurve);
+    });
+
+    // Redraw EQ curve when a new track loads (audio metadata loaded)
+    const audioPlayer = document.getElementById('audio-player');
+    if (audioPlayer) {
+        audioPlayer.addEventListener('loadedmetadata', () => {
+            // Small delay to ensure the visualizer and EQ are fully ready
+            setTimeout(() => {
+                drawEQCurve();
+            }, 100);
         });
     }
 
@@ -733,6 +1907,15 @@ export function initializeSettings(scrobbler, player, api, ui) {
         nowPlayingMode.value = nowPlayingSettings.getMode();
         nowPlayingMode.addEventListener('change', (e) => {
             nowPlayingSettings.setMode(e.target.value);
+        });
+    }
+
+    // Queue Close on Navigation Toggle
+    const queueCloseOnNavigationToggle = document.getElementById('queue-close-on-navigation-toggle');
+    if (queueCloseOnNavigationToggle) {
+        queueCloseOnNavigationToggle.checked = queueBehaviorSettings.shouldCloseOnNavigation();
+        queueCloseOnNavigationToggle.addEventListener('change', (e) => {
+            queueBehaviorSettings.setCloseOnNavigation(e.target.checked);
         });
     }
 
@@ -1075,6 +2258,14 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
+    const shuffleEditorsPicksToggle = document.getElementById('shuffle-editors-picks-toggle');
+    if (shuffleEditorsPicksToggle) {
+        shuffleEditorsPicksToggle.checked = homePageSettings.shouldShuffleEditorsPicks();
+        shuffleEditorsPicksToggle.addEventListener('change', (e) => {
+            homePageSettings.setShuffleEditorsPicks(e.target.checked);
+        });
+    }
+
     // Sidebar Section Toggles
     const sidebarShowHomeToggle = document.getElementById('sidebar-show-home-toggle');
     if (sidebarShowHomeToggle) {
@@ -1123,11 +2314,9 @@ export function initializeSettings(scrobbler, player, api, ui) {
 
     const sidebarShowSettingsToggle = document.getElementById('sidebar-show-settings-toggle');
     if (sidebarShowSettingsToggle) {
-        sidebarShowSettingsToggle.checked = sidebarSectionSettings.shouldShowSettings();
-        sidebarShowSettingsToggle.addEventListener('change', (e) => {
-            sidebarSectionSettings.setShowSettings(e.target.checked);
-            sidebarSectionSettings.applySidebarVisibility();
-        });
+        sidebarShowSettingsToggle.checked = true;
+        sidebarShowSettingsToggle.disabled = true;
+        sidebarSectionSettings.setShowSettings(true);
     }
 
     const sidebarShowAccountToggle = document.getElementById('sidebar-show-account-toggle');
@@ -1139,7 +2328,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    const sidebarShowAboutToggle = document.getElementById('sidebar-show-about-toggle');
+    const sidebarShowAboutToggle = document.getElementById('sidebar-show-about-bottom-toggle');
     if (sidebarShowAboutToggle) {
         sidebarShowAboutToggle.checked = sidebarSectionSettings.shouldShowAbout();
         sidebarShowAboutToggle.addEventListener('change', (e) => {
@@ -1148,7 +2337,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    const sidebarShowDownloadToggle = document.getElementById('sidebar-show-download-toggle');
+    const sidebarShowDownloadToggle = document.getElementById('sidebar-show-download-bottom-toggle');
     if (sidebarShowDownloadToggle) {
         sidebarShowDownloadToggle.checked = sidebarSectionSettings.shouldShowDownload();
         sidebarShowDownloadToggle.addEventListener('change', (e) => {
@@ -1157,7 +2346,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    const sidebarShowDiscordToggle = document.getElementById('sidebar-show-discord-toggle');
+    const sidebarShowDiscordToggle = document.getElementById('sidebar-show-discordbtn-toggle');
     if (sidebarShowDiscordToggle) {
         sidebarShowDiscordToggle.checked = sidebarSectionSettings.shouldShowDiscord();
         sidebarShowDiscordToggle.addEventListener('change', (e) => {
@@ -1168,6 +2357,115 @@ export function initializeSettings(scrobbler, player, api, ui) {
 
     // Apply sidebar visibility on initialization
     sidebarSectionSettings.applySidebarVisibility();
+
+    const sidebarSettingsGroup = sidebarShowHomeToggle?.closest('.settings-group');
+    if (sidebarSettingsGroup) {
+        const toggleIdFromSidebarId = (sidebarId) =>
+            sidebarId ? sidebarId.replace('sidebar-nav-', 'sidebar-show-') + '-toggle' : '';
+
+        const sidebarOrderConfig = sidebarSectionSettings.DEFAULT_ORDER.map((sidebarId) => ({
+            sidebarId,
+            toggleId: toggleIdFromSidebarId(sidebarId),
+        }));
+
+        sidebarOrderConfig.forEach(({ toggleId, sidebarId }) => {
+            const toggle = document.getElementById(toggleId);
+            const item = toggle?.closest('.setting-item');
+            if (!item) return;
+            item.dataset.sidebarId = sidebarId;
+            item.classList.add('sidebar-setting-item');
+            item.draggable = true;
+        });
+
+        const mainContainer = sidebarSettingsGroup.querySelector('.sidebar-settings-main');
+        const bottomContainer = sidebarSettingsGroup.querySelector('.sidebar-settings-bottom');
+
+        const getSidebarItems = () => [
+            ...(mainContainer?.querySelectorAll('.sidebar-setting-item[data-sidebar-id]') ?? []),
+            ...(bottomContainer?.querySelectorAll('.sidebar-setting-item[data-sidebar-id]') ?? []),
+        ];
+
+        const applySidebarSettingsOrder = () => {
+            const order = sidebarSectionSettings.getOrder();
+            const bottomIds = sidebarSectionSettings.getBottomNavIds();
+            const mainOrder = order.filter((id) => !bottomIds.includes(id));
+            const bottomOrder = order.filter((id) => bottomIds.includes(id));
+            const allItems = getSidebarItems();
+            const itemMap = new Map(allItems.map((item) => [item.dataset.sidebarId, item]));
+
+            mainOrder.forEach((id) => {
+                const item = itemMap.get(id);
+                if (item && mainContainer) mainContainer.appendChild(item);
+            });
+            bottomOrder.forEach((id) => {
+                const item = itemMap.get(id);
+                if (item && bottomContainer) bottomContainer.appendChild(item);
+            });
+        };
+
+        applySidebarSettingsOrder();
+
+        let draggedItem = null;
+
+        const saveSidebarOrder = () => {
+            const order = getSidebarItems().map((item) => item.dataset.sidebarId);
+            sidebarSectionSettings.setOrder(order);
+            sidebarSectionSettings.applySidebarVisibility();
+        };
+
+        const handleDragStart = (e) => {
+            const item = e.target.closest('.sidebar-setting-item');
+            if (!item) return;
+            draggedItem = item;
+            draggedItem.classList.add('dragging');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', item.dataset.sidebarId || '');
+            }
+        };
+
+        const handleDragEnd = () => {
+            if (!draggedItem) return;
+            draggedItem.classList.remove('dragging');
+            draggedItem = null;
+            saveSidebarOrder();
+        };
+
+        const getDragAfterElement = (elements, y) => {
+            const draggableElements = elements.filter((el) => el !== draggedItem);
+            return draggableElements.reduce(
+                (closest, child) => {
+                    const box = child.getBoundingClientRect();
+                    const offset = y - box.top - box.height / 2;
+                    if (offset < 0 && offset > closest.offset) {
+                        return { offset, element: child };
+                    }
+                    return closest;
+                },
+                { offset: Number.NEGATIVE_INFINITY }
+            ).element;
+        };
+
+        const handleDragOver = (e) => {
+            e.preventDefault();
+            if (!draggedItem) return;
+            const container = draggedItem.parentElement;
+            if (container !== mainContainer && container !== bottomContainer) return;
+            const sectionItems = Array.from(container.querySelectorAll('.sidebar-setting-item[data-sidebar-id]'));
+            const afterElement = getDragAfterElement(sectionItems, e.clientY);
+            if (afterElement === draggedItem) return;
+            if (afterElement) {
+                container.insertBefore(draggedItem, afterElement);
+            } else {
+                container.appendChild(draggedItem);
+            }
+        };
+
+        sidebarSettingsGroup.addEventListener('dragstart', handleDragStart);
+        sidebarSettingsGroup.addEventListener('dragend', handleDragEnd);
+        sidebarSettingsGroup.addEventListener('dragover', handleDragOver);
+        sidebarSettingsGroup.addEventListener('drop', (e) => e.preventDefault());
+    }
 
     // Filename template setting
     const filenameTemplate = document.getElementById('filename-template');
@@ -1367,19 +2665,35 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const customDbCancelBtn = document.getElementById('custom-db-cancel');
 
     if (customDbBtn && customDbModal) {
+        const fbFromEnv = !!window.__FIREBASE_CONFIG__;
+        const pbFromEnv = !!window.__POCKETBASE_URL__;
+
+        // Hide entire setting if both are server-configured
+        if (fbFromEnv && pbFromEnv) {
+            const settingItem = customDbBtn.closest('.setting-item');
+            if (settingItem) settingItem.style.display = 'none';
+        }
+
+        // Hide individual fields in the modal
+        if (pbFromEnv && customPbUrlInput) customPbUrlInput.closest('div[style]').style.display = 'none';
+        if (fbFromEnv && customFirebaseConfigInput)
+            customFirebaseConfigInput.closest('div[style]').style.display = 'none';
+
         customDbBtn.addEventListener('click', () => {
             const pbUrl = localStorage.getItem('monochrome-pocketbase-url') || '';
             const fbConfig = localStorage.getItem('monochrome-firebase-config');
 
-            customPbUrlInput.value = pbUrl;
-            if (fbConfig) {
-                try {
-                    customFirebaseConfigInput.value = JSON.stringify(JSON.parse(fbConfig), null, 2);
-                } catch {
-                    customFirebaseConfigInput.value = fbConfig;
+            if (!pbFromEnv) customPbUrlInput.value = pbUrl;
+            if (!fbFromEnv) {
+                if (fbConfig) {
+                    try {
+                        customFirebaseConfigInput.value = JSON.stringify(JSON.parse(fbConfig), null, 2);
+                    } catch {
+                        customFirebaseConfigInput.value = fbConfig;
+                    }
+                } else {
+                    customFirebaseConfigInput.value = '';
                 }
-            } else {
-                customFirebaseConfigInput.value = '';
             }
 
             customDbModal.classList.add('active');
@@ -1428,11 +2742,90 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
+    // PWA Auto-Update Toggle
+    const pwaAutoUpdateToggle = document.getElementById('pwa-auto-update-toggle');
+    if (pwaAutoUpdateToggle) {
+        pwaAutoUpdateToggle.checked = pwaUpdateSettings.isAutoUpdateEnabled();
+        pwaAutoUpdateToggle.addEventListener('change', (e) => {
+            pwaUpdateSettings.setAutoUpdateEnabled(e.target.checked);
+        });
+    }
+
+    // Analytics Toggle
+    const analyticsToggle = document.getElementById('analytics-toggle');
+    if (analyticsToggle) {
+        analyticsToggle.checked = analyticsSettings.isEnabled();
+        analyticsToggle.addEventListener('change', (e) => {
+            analyticsSettings.setEnabled(e.target.checked);
+        });
+    }
+
+    // Reset Local Data Button
+    const resetLocalDataBtn = document.getElementById('reset-local-data-btn');
+    if (resetLocalDataBtn) {
+        resetLocalDataBtn.addEventListener('click', async () => {
+            if (
+                confirm(
+                    'WARNING: This will clear all local data including settings, cache, and library.\n\nAre you sure you want to continue?\n\n(Cloud-synced data will not be affected)'
+                )
+            ) {
+                try {
+                    // Clear all localStorage
+                    const keysToPreserve = [];
+                    // Optionally preserve certain keys if needed
+
+                    // Get all keys
+                    const allKeys = Object.keys(localStorage);
+
+                    // Clear each key except preserved ones
+                    allKeys.forEach((key) => {
+                        if (!keysToPreserve.includes(key)) {
+                            localStorage.removeItem(key);
+                        }
+                    });
+
+                    // Clear IndexedDB - try to clear individual stores, fallback to deleting database
+                    try {
+                        const stores = ['tracks', 'albums', 'artists', 'playlists', 'settings', 'history'];
+                        for (const storeName of stores) {
+                            try {
+                                await db.performTransaction(storeName, 'readwrite', (store) => store.clear());
+                            } catch {
+                                // Store might not exist, continue
+                            }
+                        }
+                    } catch (dbError) {
+                        console.log('Could not clear IndexedDB stores:', dbError);
+                        // Try to delete the entire database as fallback
+                        try {
+                            const deleteRequest = indexedDB.deleteDatabase('monochromeDB');
+                            await new Promise((resolve, reject) => {
+                                deleteRequest.onsuccess = resolve;
+                                deleteRequest.onerror = reject;
+                            });
+                        } catch (deleteError) {
+                            console.log('Could not delete IndexedDB:', deleteError);
+                        }
+                    }
+
+                    alert('All local data has been cleared. The app will now reload.');
+                    window.location.reload();
+                } catch (error) {
+                    console.error('Failed to reset local data:', error);
+                    alert('Failed to reset local data: ' + error.message);
+                }
+            }
+        });
+    }
+
     // Font Settings
     initializeFontSettings();
 
     // Settings Search functionality
     setupSettingsSearch();
+
+    // Blocked Content Management
+    initializeBlockedContentManager();
 }
 
 function initializeFontSettings() {
@@ -1491,6 +2884,8 @@ function initializeFontSettings() {
             );
         } else if (value === 'monospace') {
             fontSettings.loadPresetFont('monospace', 'monospace');
+        } else if (value === 'Apple Music') {
+            fontSettings.loadAppleMusicFont();
         } else {
             fontSettings.loadPresetFont(value, 'sans-serif');
         }
@@ -1578,6 +2973,59 @@ function initializeFontSettings() {
     }
 
     renderUploadedFontsList();
+
+    // Font Size Controls
+    const fontSizeSlider = document.getElementById('font-size-slider');
+    const fontSizeInput = document.getElementById('font-size-input');
+    const fontSizeReset = document.getElementById('font-size-reset');
+
+    // Helper function to update both controls
+    const updateFontSizeControls = (size) => {
+        const validSize = Math.max(50, Math.min(200, parseInt(size, 10) || 100));
+        if (fontSizeSlider) fontSizeSlider.value = validSize;
+        if (fontSizeInput) fontSizeInput.value = validSize;
+        return validSize;
+    };
+
+    // Initialize with saved value
+    const savedSize = fontSettings.getFontSize();
+    updateFontSizeControls(savedSize);
+
+    // Slider change handler
+    if (fontSizeSlider) {
+        fontSizeSlider.addEventListener('input', () => {
+            const size = parseInt(fontSizeSlider.value, 10);
+            if (fontSizeInput) fontSizeInput.value = size;
+            fontSettings.setFontSize(size);
+        });
+    }
+
+    // Number input change handler
+    if (fontSizeInput) {
+        fontSizeInput.addEventListener('change', () => {
+            let size = parseInt(fontSizeInput.value, 10);
+            // Clamp to valid range
+            size = Math.max(50, Math.min(200, size || 100));
+            updateFontSizeControls(size);
+            fontSettings.setFontSize(size);
+        });
+
+        // Also update on input for real-time feedback
+        fontSizeInput.addEventListener('input', () => {
+            let size = parseInt(fontSizeInput.value, 10);
+            if (!isNaN(size) && size >= 50 && size <= 200) {
+                if (fontSizeSlider) fontSizeSlider.value = size;
+                fontSettings.setFontSize(size);
+            }
+        });
+    }
+
+    if (fontSizeReset) {
+        fontSizeReset.addEventListener('click', () => {
+            const defaultSize = fontSettings.resetFontSize();
+            updateFontSizeControls(defaultSize);
+        });
+    }
 }
 
 function setupSettingsSearch() {
@@ -1617,7 +3065,7 @@ function filterSettings(query) {
     const allTabs = settingsPage.querySelectorAll('.settings-tab');
 
     if (!query) {
-        // Reset: show active tab only
+        // Reset: show saved active tab
         allTabContents.forEach((content) => {
             content.classList.remove('active');
         });
@@ -1625,12 +3073,17 @@ function filterSettings(query) {
             tab.classList.remove('active');
         });
 
-        // Restore first tab as active
-        const firstTab = allTabs[0];
-        const firstContent = allTabContents[0];
-        if (firstTab && firstContent) {
-            firstTab.classList.add('active');
-            firstContent.classList.add('active');
+        // Restore saved tab as active
+        const savedTabName = settingsUiState.getActiveTab();
+        const savedTab = document.querySelector(`.settings-tab[data-tab="${savedTabName}"]`);
+        const savedContent = document.getElementById(`settings-tab-${savedTabName}`);
+        if (savedTab && savedContent) {
+            savedTab.classList.add('active');
+            savedContent.classList.add('active');
+        } else if (allTabs[0] && allTabContents[0]) {
+            // Fallback to first tab if saved tab not found
+            allTabs[0].classList.add('active');
+            allTabContents[0].classList.add('active');
         }
 
         // Show all settings groups and items
@@ -1676,4 +3129,139 @@ function filterSettings(query) {
         // Show/hide group based on whether it has any visible items
         group.style.display = hasMatch ? '' : 'none';
     });
+}
+
+function initializeBlockedContentManager() {
+    const manageBtn = document.getElementById('manage-blocked-btn');
+    const clearAllBtn = document.getElementById('clear-all-blocked-btn');
+    const blockedListContainer = document.getElementById('blocked-content-list');
+    const blockedArtistsList = document.getElementById('blocked-artists-list');
+    const blockedAlbumsList = document.getElementById('blocked-albums-list');
+    const blockedTracksList = document.getElementById('blocked-tracks-list');
+    const blockedArtistsSection = document.getElementById('blocked-artists-section');
+    const blockedAlbumsSection = document.getElementById('blocked-albums-section');
+    const blockedTracksSection = document.getElementById('blocked-tracks-section');
+    const blockedEmptyMessage = document.getElementById('blocked-empty-message');
+
+    if (!manageBtn || !blockedListContainer) return;
+
+    function renderBlockedLists() {
+        const artists = contentBlockingSettings.getBlockedArtists();
+        const albums = contentBlockingSettings.getBlockedAlbums();
+        const tracks = contentBlockingSettings.getBlockedTracks();
+        const totalCount = artists.length + albums.length + tracks.length;
+
+        // Update manage button text
+        manageBtn.textContent = totalCount > 0 ? `Manage (${totalCount})` : 'Manage';
+
+        // Show/hide clear all button
+        if (clearAllBtn) {
+            clearAllBtn.style.display = totalCount > 0 ? 'inline-block' : 'none';
+        }
+
+        // Show/hide sections
+        blockedArtistsSection.style.display = artists.length > 0 ? 'block' : 'none';
+        blockedAlbumsSection.style.display = albums.length > 0 ? 'block' : 'none';
+        blockedTracksSection.style.display = tracks.length > 0 ? 'block' : 'none';
+        blockedEmptyMessage.style.display = totalCount === 0 ? 'block' : 'none';
+
+        // Render artists
+        if (blockedArtistsList) {
+            blockedArtistsList.innerHTML = artists
+                .map(
+                    (artist) => `
+                <li data-id="${artist.id}" data-type="artist">
+                    <div class="item-info">
+                        <div class="item-name">${escapeHtml(artist.name)}</div>
+                        <div class="item-meta">${new Date(artist.blockedAt).toLocaleDateString()}</div>
+                    </div>
+                    <button class="unblock-btn" data-id="${artist.id}" data-type="artist">Unblock</button>
+                </li>
+            `
+                )
+                .join('');
+        }
+
+        // Render albums
+        if (blockedAlbumsList) {
+            blockedAlbumsList.innerHTML = albums
+                .map(
+                    (album) => `
+                <li data-id="${album.id}" data-type="album">
+                    <div class="item-info">
+                        <div class="item-name">${escapeHtml(album.title)}</div>
+                        <div class="item-meta">${escapeHtml(album.artist || 'Unknown Artist')} • ${new Date(album.blockedAt).toLocaleDateString()}</div>
+                    </div>
+                    <button class="unblock-btn" data-id="${album.id}" data-type="album">Unblock</button>
+                </li>
+            `
+                )
+                .join('');
+        }
+
+        // Render tracks
+        if (blockedTracksList) {
+            blockedTracksList.innerHTML = tracks
+                .map(
+                    (track) => `
+                <li data-id="${track.id}" data-type="track">
+                    <div class="item-info">
+                        <div class="item-name">${escapeHtml(track.title)}</div>
+                        <div class="item-meta">${escapeHtml(track.artist || 'Unknown Artist')} • ${new Date(track.blockedAt).toLocaleDateString()}</div>
+                    </div>
+                    <button class="unblock-btn" data-id="${track.id}" data-type="track">Unblock</button>
+                </li>
+            `
+                )
+                .join('');
+        }
+
+        // Add unblock button handlers
+        blockedListContainer.querySelectorAll('.unblock-btn').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const id = btn.dataset.id;
+                const type = btn.dataset.type;
+
+                if (type === 'artist') {
+                    contentBlockingSettings.unblockArtist(id);
+                } else if (type === 'album') {
+                    contentBlockingSettings.unblockAlbum(id);
+                } else if (type === 'track') {
+                    contentBlockingSettings.unblockTrack(id);
+                }
+
+                renderBlockedLists();
+            });
+        });
+    }
+
+    // Toggle blocked list visibility
+    manageBtn.addEventListener('click', () => {
+        const isVisible = blockedListContainer.style.display !== 'none';
+        blockedListContainer.style.display = isVisible ? 'none' : 'block';
+        if (!isVisible) {
+            renderBlockedLists();
+        }
+    });
+
+    // Clear all blocked content
+    if (clearAllBtn) {
+        clearAllBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to unblock all artists, albums, and tracks?')) {
+                contentBlockingSettings.clearAllBlocked();
+                renderBlockedLists();
+            }
+        });
+    }
+
+    // Initial render
+    renderBlockedLists();
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }

@@ -1,6 +1,14 @@
 //js/app.js
-import { LosslessAPI } from './api.js';
-import { apiSettings, themeManager, nowPlayingSettings, downloadQualitySettings, sidebarSettings } from './storage.js';
+import { MusicAPI } from './music-api.js';
+import {
+    apiSettings,
+    themeManager,
+    nowPlayingSettings,
+    downloadQualitySettings,
+    sidebarSettings,
+    pwaUpdateSettings,
+    queueBehaviorSettings,
+} from './storage.js';
 import { UIRenderer } from './ui.js';
 import { Player } from './player.js';
 import { MultiScrobbler } from './multi-scrobbler.js';
@@ -8,17 +16,41 @@ import { LyricsManager, openLyricsPanel, clearLyricsPanelSync } from './lyrics.j
 import { createRouter, updateTabTitle, navigate } from './router.js';
 import { initializePlayerEvents, initializeTrackInteractions, handleTrackAction } from './events.js';
 import { initializeUIInteractions } from './ui-interactions.js';
-import { debounce, SVG_PLAY } from './utils.js';
+import { debounce, SVG_PLAY, getShareUrl } from './utils.js';
 import { sidePanelManager } from './side-panel.js';
 import { db } from './db.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { registerSW } from 'virtual:pwa-register';
 import './smooth-scrolling.js';
 
+import { initTracker } from './tracker.js';
+import {
+    initAnalytics,
+    trackSidebarNavigation,
+    trackCreatePlaylist,
+    trackCreateFolder,
+    trackImportJSPF,
+    trackImportCSV,
+    trackImportXSPF,
+    trackImportXML,
+    trackImportM3U,
+    trackSelectLocalFolder,
+    trackChangeLocalFolder,
+    trackOpenModal,
+    trackCloseModal,
+    trackKeyboardShortcut,
+    trackPwaUpdate,
+    trackDismissUpdate,
+    trackOpenFullscreenCover,
+    trackCloseFullscreenCover,
+    trackOpenLyrics,
+    trackCloseLyrics,
+} from './analytics.js';
+import { parseCSV, parseJSPF, parseXSPF, parseXML, parseM3U } from './playlist-importer.js';
+
 // Lazy-loaded modules
 let settingsModule = null;
 let downloadsModule = null;
-let trackerModule = null;
 let metadataModule = null;
 
 async function loadSettingsModule() {
@@ -33,13 +65,6 @@ async function loadDownloadsModule() {
         downloadsModule = await import('./downloads.js');
     }
     return downloadsModule;
-}
-
-async function loadTrackerModule() {
-    if (!trackerModule) {
-        trackerModule = await import('./tracker.js');
-    }
-    return trackerModule;
 }
 
 async function loadMetadataModule() {
@@ -129,52 +154,66 @@ function initializeKeyboardShortcuts(player, audioPlayer) {
         switch (e.key.toLowerCase()) {
             case ' ':
                 e.preventDefault();
+                trackKeyboardShortcut('Space');
                 player.handlePlayPause();
                 break;
             case 'arrowright':
                 if (e.shiftKey) {
+                    trackKeyboardShortcut('Shift+Right');
                     player.playNext();
                 } else {
+                    trackKeyboardShortcut('Right');
                     audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 10);
                 }
                 break;
             case 'arrowleft':
                 if (e.shiftKey) {
+                    trackKeyboardShortcut('Shift+Left');
                     player.playPrev();
                 } else {
+                    trackKeyboardShortcut('Left');
                     audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 10);
                 }
                 break;
             case 'arrowup':
                 e.preventDefault();
+                trackKeyboardShortcut('Up');
                 player.setVolume(player.userVolume + 0.1);
                 break;
             case 'arrowdown':
                 e.preventDefault();
+                trackKeyboardShortcut('Down');
                 player.setVolume(player.userVolume - 0.1);
                 break;
             case 'm':
+                trackKeyboardShortcut('M');
                 audioPlayer.muted = !audioPlayer.muted;
                 break;
             case 's':
+                trackKeyboardShortcut('S');
                 document.getElementById('shuffle-btn')?.click();
                 break;
             case 'r':
+                trackKeyboardShortcut('R');
                 document.getElementById('repeat-btn')?.click();
                 break;
             case 'q':
+                trackKeyboardShortcut('Q');
                 document.getElementById('queue-btn')?.click();
                 break;
             case '/':
                 e.preventDefault();
+                trackKeyboardShortcut('/');
                 document.getElementById('search-input')?.focus();
                 break;
             case 'escape':
+                trackKeyboardShortcut('Escape');
                 document.getElementById('search-input')?.blur();
                 sidePanelManager.close();
                 clearLyricsPanelSync(audioPlayer, sidePanelManager.panel);
                 break;
             case 'l':
+                trackKeyboardShortcut('L');
                 document.querySelector('.now-playing-bar .cover')?.click();
                 break;
         }
@@ -208,14 +247,60 @@ function hideOfflineNotification() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
-    const api = new LosslessAPI(apiSettings);
+async function disablePwaForAuthGate() {
+    if (!('serviceWorker' in navigator)) return;
 
+    try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((registration) => registration.unregister()));
+    } catch (error) {
+        console.warn('Failed to unregister service workers:', error);
+    }
+
+    if ('caches' in window) {
+        try {
+            const cacheKeys = await caches.keys();
+            await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+        } catch (error) {
+            console.warn('Failed to clear caches:', error);
+        }
+    }
+}
+
+async function uploadCoverImage(file) {
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || `Upload failed: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data.url;
+    } catch (error) {
+        console.error('Cover upload error:', error);
+        throw error;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Initialize analytics
+    initAnalytics();
+
+    const api = new MusicAPI(apiSettings);
     const audioPlayer = document.getElementById('audio-player');
 
     // i love ios and macos!!!! webkit fucking SUCKS BULLSHIT sorry ios/macos heads yall getting lossless only
+    // Use window.__IS_IOS__ (set before UA spoof in index.html) so detection works on real iOS.
+    const isIOS = typeof window !== 'undefined' && window.__IS_IOS__ === true;
     const ua = navigator.userAgent.toLowerCase();
-    const isIOS = /iphone|ipad|ipod/.test(ua) || (ua.includes('mac') && navigator.maxTouchPoints > 1);
     const isSafari =
         ua.includes('safari') && !ua.includes('chrome') && !ua.includes('crios') && !ua.includes('android');
 
@@ -241,78 +326,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     const currentQuality = localStorage.getItem('playback-quality') || 'HI_RES_LOSSLESS';
     const player = new Player(audioPlayer, api, currentQuality);
 
+    // Initialize tracker
+    initTracker(player);
+
+    // Linux Media Keys Fix
+    if (window.NL_MODE) {
+        import('./desktop/neutralino-bridge.js').then(({ events }) => {
+            events.on('mediaNext', () => player.playNext());
+            events.on('mediaPrevious', () => player.playPrev());
+            events.on('mediaPlayPause', () => player.handlePlayPause());
+            events.on('mediaStop', () => {
+                player.audio.pause();
+                player.audio.currentTime = 0;
+            });
+            console.log('Media keys initialized via bridge');
+        });
+    }
+
+    // Initialize desktop features if in Neutralino mode
+    if (
+        typeof window !== 'undefined' &&
+        (window.NL_MODE ||
+            window.location.search.includes('mode=neutralino') ||
+            window.location.search.includes('nl_port='))
+    ) {
+        window.NL_MODE = true;
+        try {
+            const desktopModule = await import('./desktop/desktop.js');
+            await desktopModule.initDesktop(player);
+        } catch (err) {
+            console.error('Failed to load desktop module:', err);
+        }
+    }
+
+    const castBtn = document.getElementById('cast-btn');
+    initializeCasting(audioPlayer, castBtn);
+
     const ui = new UIRenderer(api, player);
     const scrobbler = new MultiScrobbler();
     const lyricsManager = new LyricsManager(api);
-
-    const originalRenderPlaylistPage = ui.renderPlaylistPage.bind(ui);
-    ui.renderPlaylistPage = async function (id, type) {
-        await originalRenderPlaylistPage(id, type);
-
-        if (type === 'user') {
-            try {
-                const playlist = await db.getPlaylist(id);
-                const imgElement = document.getElementById('playlist-detail-image');
-
-                if (!imgElement) return;
-
-                let container = imgElement.parentElement;
-                let collageElement = document.getElementById('playlist-detail-collage');
-
-                if (!container.classList.contains('detail-header-cover-container')) {
-                    container = document.createElement('div');
-                    container.className = 'detail-header-cover-container';
-                    imgElement.parentNode.insertBefore(container, imgElement);
-                    container.appendChild(imgElement);
-
-                    collageElement = document.createElement('div');
-                    collageElement.id = 'playlist-detail-collage';
-                    collageElement.className = 'detail-header-collage';
-                    collageElement.style.display = 'none';
-                    container.appendChild(collageElement);
-                }
-
-                if (playlist && !playlist.cover && collageElement && playlist.tracks && playlist.tracks.length > 0) {
-                    const tracksWithCovers = playlist.tracks.filter((t) => t.album && t.album.cover);
-
-                    if (tracksWithCovers.length > 0) {
-                        imgElement.style.setProperty('display', 'none', 'important');
-                        collageElement.style.display = 'grid';
-                        collageElement.innerHTML = '';
-
-                        const uniqueCovers = [];
-                        const seen = new Set();
-                        for (const t of tracksWithCovers) {
-                            if (!seen.has(t.album.cover)) {
-                                seen.add(t.album.cover);
-                                uniqueCovers.push(t.album.cover);
-                                if (uniqueCovers.length >= 4) break;
-                            }
-                        }
-
-                        const images = [];
-                        for (let i = 0; i < 4; i++) {
-                            images.push(uniqueCovers[i % uniqueCovers.length]);
-                        }
-
-                        images.forEach((src) => {
-                            const img = document.createElement('img');
-                            img.src = api.getCoverUrl(src);
-                            collageElement.appendChild(img);
-                        });
-                    } else {
-                        imgElement.style.removeProperty('display');
-                        collageElement.style.display = 'none';
-                    }
-                } else if (collageElement) {
-                    imgElement.style.removeProperty('display');
-                    collageElement.style.display = 'none';
-                }
-            } catch (e) {
-                console.error('Error generating playlist cover:', e);
-            }
-        }
-    };
 
     // Check browser support for local files
     const selectLocalBtn = document.getElementById('select-local-folder-btn');
@@ -337,9 +389,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Restore sidebar state
     sidebarSettings.restoreState();
 
+    // Render pinned items
+    await ui.renderPinnedItems();
+
     // Load settings module and initialize
     const { initializeSettings } = await loadSettingsModule();
     initializeSettings(scrobbler, player, api, ui);
+
+    // Track sidebar navigation clicks
+    document.querySelectorAll('.sidebar-nav a').forEach((link) => {
+        link.addEventListener('click', () => {
+            const href = link.getAttribute('href');
+            if (href && !href.startsWith('http')) {
+                const item = link.querySelector('span')?.textContent || href;
+                trackSidebarNavigation(item);
+            }
+        });
+    });
 
     initializePlayerEvents(player, audioPlayer, scrobbler, ui);
     initializeTrackInteractions(
@@ -354,13 +420,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializeUIInteractions(player, api, ui);
     initializeKeyboardShortcuts(player, audioPlayer);
 
-    // Load tracker module
-    const { initTracker } = await loadTrackerModule();
-    initTracker(player);
-
-    const castBtn = document.getElementById('cast-btn');
-    initializeCasting(audioPlayer, castBtn);
-
     // Restore UI state for the current track (like button, theme)
     if (player.currentTrack) {
         ui.setCurrentTrack(player.currentTrack);
@@ -373,6 +432,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const mode = nowPlayingSettings.getMode();
+
+        if (mode === 'lyrics') {
+            const isActive = sidePanelManager.isActive('lyrics');
+
+            if (isActive) {
+                trackCloseLyrics(player.currentTrack);
+            } else {
+                trackOpenLyrics(player.currentTrack);
+            }
+        } else if (mode === 'cover') {
+            const overlay = document.getElementById('fullscreen-cover-overlay');
+            if (overlay && overlay.style.display === 'flex') {
+                trackCloseFullscreenCover();
+            } else {
+                trackOpenFullscreenCover(player.currentTrack);
+            }
+        }
 
         if (mode === 'lyrics') {
             const isActive = sidePanelManager.isActive('lyrics');
@@ -410,6 +486,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     document.getElementById('close-fullscreen-cover-btn')?.addEventListener('click', () => {
+        trackCloseFullscreenCover();
         if (window.location.hash === '#fullscreen') {
             window.history.back();
         } else {
@@ -436,6 +513,171 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // Save sidebar state to localStorage
         sidebarSettings.setCollapsed(isCollapsed);
+    });
+
+    // Import tab switching in playlist modal
+    document.querySelectorAll('.import-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const importType = tab.dataset.importType;
+
+            // Update tab styles
+            document.querySelectorAll('.import-tab').forEach((t) => {
+                t.classList.remove('active');
+                t.style.opacity = '0.7';
+            });
+            tab.classList.add('active');
+            tab.style.opacity = '1';
+
+            // Show/hide panels
+            document.getElementById('csv-import-panel').style.display = importType === 'csv' ? 'block' : 'none';
+            document.getElementById('jspf-import-panel').style.display = importType === 'jspf' ? 'block' : 'none';
+            document.getElementById('xspf-import-panel').style.display = importType === 'xspf' ? 'block' : 'none';
+            document.getElementById('xml-import-panel').style.display = importType === 'xml' ? 'block' : 'none';
+            document.getElementById('m3u-import-panel').style.display = importType === 'm3u' ? 'block' : 'none';
+
+            // Clear all file inputs except the active one
+            document.getElementById('csv-file-input').value =
+                importType === 'csv' ? document.getElementById('csv-file-input').value : '';
+            document.getElementById('jspf-file-input').value =
+                importType === 'jspf' ? document.getElementById('jspf-file-input').value : '';
+            document.getElementById('xspf-file-input').value =
+                importType === 'xspf' ? document.getElementById('xspf-file-input').value : '';
+            document.getElementById('xml-file-input').value =
+                importType === 'xml' ? document.getElementById('xml-file-input').value : '';
+            document.getElementById('m3u-file-input').value =
+                importType === 'm3u' ? document.getElementById('m3u-file-input').value : '';
+        });
+    });
+    const spotifyBtn = document.getElementById('csv-spotify-btn');
+    const appleBtn = document.getElementById('csv-apple-btn');
+    const ytmBtn = document.getElementById('csv-ytm-btn');
+    const spotifyGuide = document.getElementById('csv-spotify-guide');
+    const appleGuide = document.getElementById('csv-apple-guide');
+    const ytmGuide = document.getElementById('csv-ytm-guide');
+    const inputContainer = document.getElementById('csv-input-container');
+
+    if (spotifyBtn && appleBtn && ytmBtn) {
+        spotifyBtn.addEventListener('click', () => {
+            spotifyBtn.classList.remove('btn-secondary');
+            spotifyBtn.classList.add('btn-primary');
+            spotifyBtn.style.opacity = '1';
+
+            appleBtn.classList.remove('btn-primary');
+            appleBtn.classList.add('btn-secondary');
+            appleBtn.style.opacity = '0.7';
+
+            ytmBtn.classList.remove('btn-primary');
+            ytmBtn.classList.add('btn-secondary');
+            ytmBtn.style.opacity = '0.7';
+
+            spotifyGuide.style.display = 'block';
+            appleGuide.style.display = 'none';
+            ytmGuide.style.display = 'none';
+            inputContainer.style.display = 'block';
+        });
+
+        appleBtn.addEventListener('click', () => {
+            appleBtn.classList.remove('btn-secondary');
+            appleBtn.classList.add('btn-primary');
+            appleBtn.style.opacity = '1';
+
+            spotifyBtn.classList.remove('btn-primary');
+            spotifyBtn.classList.add('btn-secondary');
+            spotifyBtn.style.opacity = '0.7';
+
+            ytmBtn.classList.remove('btn-primary');
+            ytmBtn.classList.add('btn-secondary');
+            ytmBtn.style.opacity = '0.7';
+
+            appleGuide.style.display = 'block';
+            spotifyGuide.style.display = 'none';
+            ytmGuide.style.display = 'none';
+            inputContainer.style.display = 'block';
+        });
+
+        ytmBtn.addEventListener('click', () => {
+            ytmBtn.classList.remove('btn-secondary');
+            ytmBtn.classList.add('btn-primary');
+            ytmBtn.style.opacity = '1';
+
+            spotifyBtn.classList.remove('btn-primary');
+            spotifyBtn.classList.add('btn-secondary');
+            spotifyBtn.style.opacity = '0.7';
+
+            appleBtn.classList.remove('btn-primary');
+            appleBtn.classList.add('btn-secondary');
+            appleBtn.style.opacity = '0.7';
+
+            ytmGuide.style.display = 'block';
+            spotifyGuide.style.display = 'none';
+            appleGuide.style.display = 'none';
+            inputContainer.style.display = 'none';
+        });
+    }
+
+    // Cover image upload functionality
+    const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+    const coverFileInput = document.getElementById('playlist-cover-file-input');
+    const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+    const coverUrlInput = document.getElementById('playlist-cover-input');
+    const coverUploadStatus = document.getElementById('playlist-cover-upload-status');
+    const coverUploadText = document.getElementById('playlist-cover-upload-text');
+
+    let useUrlInput = false;
+
+    coverUploadBtn?.addEventListener('click', () => {
+        if (useUrlInput) return;
+        coverFileInput?.click();
+    });
+
+    coverFileInput?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        // Validate file type
+        if (!file.type.startsWith('image/')) {
+            alert('Please select an image file');
+            return;
+        }
+
+        // Show uploading status
+        coverUploadStatus.style.display = 'block';
+        coverUploadText.textContent = 'Uploading...';
+        coverUploadBtn.disabled = true;
+
+        try {
+            const publicUrl = await uploadCoverImage(file);
+            coverUrlInput.value = publicUrl;
+            coverUploadText.textContent = 'Done!';
+            coverUploadText.style.color = 'var(--success)';
+
+            setTimeout(() => {
+                coverUploadStatus.style.display = 'none';
+            }, 2000);
+        } catch (error) {
+            coverUploadText.textContent = 'Failed - try URL';
+            coverUploadText.style.color = 'var(--error)';
+            console.error('Upload failed:', error);
+        } finally {
+            coverUploadBtn.disabled = false;
+        }
+    });
+
+    coverToggleUrlBtn?.addEventListener('click', () => {
+        useUrlInput = !useUrlInput;
+        if (useUrlInput) {
+            coverUploadBtn.style.flex = '0 0 auto';
+            coverUploadBtn.style.display = 'none';
+            coverUrlInput.style.display = 'block';
+            coverToggleUrlBtn.textContent = 'Upload';
+            coverToggleUrlBtn.title = 'Switch to file upload';
+        } else {
+            coverUploadBtn.style.flex = '1';
+            coverUploadBtn.style.display = 'flex';
+            coverUrlInput.style.display = 'none';
+            coverToggleUrlBtn.textContent = 'or URL';
+            coverToggleUrlBtn.title = 'Switch to URL input';
+        }
     });
 
     document.getElementById('nav-back')?.addEventListener('click', () => {
@@ -477,6 +719,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Update UI with current track info for theme
         ui.setCurrentTrack(player.currentTrack);
 
+        // Update Media Session with new track
+        player.updateMediaSession(player.currentTrack);
+
         const currentTrackId = player.currentTrack.id;
         if (currentTrackId === previousTrackId) return;
         previousTrackId = currentTrackId;
@@ -513,7 +758,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const pathParts = window.location.pathname.split('/');
             const albumIndex = pathParts.indexOf('album');
-            const albumId = albumIndex !== -1 ? pathParts[albumIndex + 1] : null;
+            let albumId = albumIndex !== -1 ? pathParts[albumIndex + 1] : null;
+            // Handle /album/t/ID format
+            if (albumId === 't') {
+                albumId = pathParts[albumIndex + 2];
+            }
 
             if (!albumId) return;
 
@@ -547,7 +796,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             const pathParts = window.location.pathname.split('/');
             const albumIndex = pathParts.indexOf('album');
-            const albumId = albumIndex !== -1 ? pathParts[albumIndex + 1] : null;
+            let albumId = albumIndex !== -1 ? pathParts[albumIndex + 1] : null;
+            // Handle /album/t/ID format
+            if (albumId === 't') {
+                albumId = pathParts[albumIndex + 2];
+            }
 
             if (!albumId) return;
 
@@ -560,6 +813,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (shuffleBtn) shuffleBtn.classList.remove('active');
                     player.shuffleActive = false;
                     player.playTrackFromQueue();
+
                     const { showNotification } = await loadDownloadsModule();
                     showNotification('Shuffling album');
                 }
@@ -645,13 +899,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (e.target.closest('#create-playlist-btn')) {
+            trackOpenModal('Create Playlist');
             const modal = document.getElementById('playlist-modal');
             document.getElementById('playlist-modal-title').textContent = 'Create Playlist';
             document.getElementById('playlist-name-input').value = '';
             document.getElementById('playlist-cover-input').value = '';
+            document.getElementById('playlist-cover-file-input').value = '';
+            document.getElementById('playlist-description-input').value = '';
             modal.dataset.editingId = '';
-            document.getElementById('csv-import-section').style.display = 'block';
+            document.getElementById('import-section').style.display = 'block';
             document.getElementById('csv-file-input').value = '';
+            document.getElementById('ytm-url-input').value = '';
+            document.getElementById('ytm-status').textContent = '';
+            document.getElementById('jspf-file-input').value = '';
+            document.getElementById('xspf-file-input').value = '';
+            document.getElementById('xml-file-input').value = '';
+            document.getElementById('m3u-file-input').value = '';
+
+            // Reset import tabs to CSV
+            document.querySelectorAll('.import-tab').forEach((tab) => {
+                tab.classList.toggle('active', tab.dataset.importType === 'csv');
+            });
+            document.getElementById('csv-import-panel').style.display = 'block';
+            document.getElementById('jspf-import-panel').style.display = 'none';
+            document.getElementById('xspf-import-panel').style.display = 'none';
+            document.getElementById('xml-import-panel').style.display = 'none';
+            document.getElementById('m3u-import-panel').style.display = 'none';
 
             // Reset Public Toggle
             const publicToggle = document.getElementById('playlist-public-toggle');
@@ -659,11 +932,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (publicToggle) publicToggle.checked = false;
             if (shareBtn) shareBtn.style.display = 'none';
 
+            // Reset cover upload state
+            const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+            const coverUrlInput = document.getElementById('playlist-cover-input');
+            const coverUploadStatus = document.getElementById('playlist-cover-upload-status');
+            const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+            if (coverUploadBtn) {
+                coverUploadBtn.style.flex = '1';
+                coverUploadBtn.style.display = 'flex';
+            }
+            if (coverUrlInput) coverUrlInput.style.display = 'none';
+            if (coverUploadStatus) coverUploadStatus.style.display = 'none';
+            if (coverToggleUrlBtn) {
+                coverToggleUrlBtn.textContent = 'or URL';
+                coverToggleUrlBtn.title = 'Switch to URL input';
+            }
+
             modal.classList.add('active');
             document.getElementById('playlist-name-input').focus();
         }
 
         if (e.target.closest('#create-folder-btn')) {
+            trackOpenModal('Create Folder');
             const modal = document.getElementById('folder-modal');
             document.getElementById('folder-name-input').value = '';
             document.getElementById('folder-cover-input').value = '';
@@ -676,9 +966,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             const cover = document.getElementById('folder-cover-input').value.trim();
 
             if (name) {
-                await db.createFolder(name, cover);
+                const folder = await db.createFolder(name, cover);
+                trackCreateFolder(folder);
+                await syncManager.syncUserFolder(folder, 'create');
                 ui.renderLibraryPage();
                 document.getElementById('folder-modal').classList.remove('active');
+                trackCloseModal('Create Folder');
             }
         }
 
@@ -690,12 +983,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             const folderId = window.location.pathname.split('/')[2];
             if (folderId && confirm('Are you sure you want to delete this folder?')) {
                 await db.deleteFolder(folderId);
+                // Sync deletion to cloud
+                await syncManager.syncUserFolder({ id: folderId }, 'delete');
                 navigate('/library');
             }
         }
 
         if (e.target.closest('#playlist-modal-save')) {
-            const name = document.getElementById('playlist-name-input').value.trim();
+            let name = document.getElementById('playlist-name-input').value.trim();
+            let description = document.getElementById('playlist-description-input').value.trim();
             const isPublic = document.getElementById('playlist-public-toggle')?.checked;
 
             if (name) {
@@ -728,6 +1024,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         if (playlist) {
                             playlist.name = name;
                             playlist.cover = cover;
+                            playlist.description = description;
                             await handlePublicStatus(playlist);
                             await db.performTransaction('user_playlists', 'readwrite', (store) => store.put(playlist));
                             syncManager.syncUserPlaylist(playlist, 'update');
@@ -743,20 +1040,218 @@ document.addEventListener('DOMContentLoaded', async () => {
                 } else {
                     // Create
                     const csvFileInput = document.getElementById('csv-file-input');
+                    const jspfFileInput = document.getElementById('jspf-file-input');
+                    const xspfFileInput = document.getElementById('xspf-file-input');
+                    const xmlFileInput = document.getElementById('xml-file-input');
+                    const m3uFileInput = document.getElementById('m3u-file-input');
                     let tracks = [];
+                    let importSource = 'manual';
+                    let cover = document.getElementById('playlist-cover-input').value.trim();
 
-                    if (csvFileInput.files.length > 0) {
-                        // Import from CSV
-                        const file = csvFileInput.files[0];
+                    // Helper function for import progress
+                    const setupProgressElements = () => {
                         const progressElement = document.getElementById('csv-import-progress');
                         const progressFill = document.getElementById('csv-progress-fill');
                         const progressCurrent = document.getElementById('csv-progress-current');
                         const progressTotal = document.getElementById('csv-progress-total');
                         const currentTrackElement = progressElement.querySelector('.current-track');
                         const currentArtistElement = progressElement.querySelector('.current-artist');
+                        return {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        };
+                    };
+
+                    const isYTMActive = document.getElementById('csv-ytm-btn')?.classList.contains('btn-primary');
+                    const ytmUrlInput = document.getElementById('ytm-url-input');
+
+                    if (isYTMActive && ytmUrlInput.value.trim()) {
+                        importSource = 'ytm_import';
+                        const url = ytmUrlInput.value.trim();
+                        const playlistId = url.split('list=')[1]?.split('&')[0];
+
+                        const workerUrl = `https://ytmimport.samidy.workers.dev?playlistId=${playlistId}`;
+
+                        if (!playlistId) {
+                            alert("Invalid URL. Make sure it has 'list=' in it.");
+                            return;
+                        }
+
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
 
                         try {
-                            // Show progress bar
+                            progressElement.style.display = 'block';
+                            progressFill.style.width = '0%';
+                            progressCurrent.textContent = '0';
+                            currentTrackElement.textContent = 'Fetching from YouTube...';
+                            if (currentArtistElement) currentArtistElement.textContent = '';
+
+                            const response = await fetch(workerUrl);
+                            const songs = await response.json();
+
+                            if (songs.error) throw new Error(songs.error);
+
+                            currentTrackElement.textContent = `Processing ${songs.length} songs...`;
+
+                            const headers = 'Title,Artist,URL\n';
+                            const csvText =
+                                headers +
+                                songs
+                                    .map(
+                                        (s) =>
+                                            `"${s.title.replace(/"/g, '""')}","${s.artist.replace(/"/g, '""')}","${s.url}"`
+                                    )
+                                    .join('\n');
+
+                            const totalTracks = songs.length;
+                            progressTotal.textContent = totalTracks.toString();
+
+                            const result = await parseCSV(csvText, api, (progress) => {
+                                const percentage = totalTracks > 0 ? (progress.current / totalTracks) * 100 : 0;
+                                progressFill.style.width = `${Math.min(percentage, 100)}%`;
+                                progressCurrent.textContent = progress.current.toString();
+                                currentTrackElement.textContent = progress.currentTrack;
+                                if (currentArtistElement)
+                                    currentArtistElement.textContent = progress.currentArtist || '';
+                            });
+
+                            tracks = result.tracks;
+                            const missingTracks = result.missingTracks;
+
+                            if (tracks.length === 0) {
+                                alert('No valid tracks found in the YouTube playlist!');
+                                progressElement.style.display = 'none';
+                                return;
+                            }
+
+                            console.log(`Imported ${tracks.length} tracks from YouTube`);
+                            trackImportCSV(name || 'Untitled', tracks.length, missingTracks.length);
+
+                            if (missingTracks.length > 0) {
+                                setTimeout(() => {
+                                    showMissingTracksNotification(missingTracks);
+                                }, 500);
+                            }
+                        } catch (err) {
+                            console.error('YTM Import Error:', err);
+                            alert(`Error importing from YouTube: ${err.message}`);
+                            progressElement.style.display = 'none';
+                            return;
+                        } finally {
+                            setTimeout(() => {
+                                progressElement.style.display = 'none';
+                            }, 1000);
+                        }
+                    } else if (jspfFileInput.files.length > 0) {
+                        // Import from JSPF
+                        importSource = 'jspf_import';
+                        const file = jspfFileInput.files[0];
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
+
+                        try {
+                            progressElement.style.display = 'block';
+                            progressFill.style.width = '0%';
+                            progressCurrent.textContent = '0';
+                            currentTrackElement.textContent = 'Reading JSPF file...';
+                            if (currentArtistElement) currentArtistElement.textContent = '';
+
+                            const jspfText = await file.text();
+
+                            const result = await parseJSPF(jspfText, api, (progress) => {
+                                const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+                                progressFill.style.width = `${Math.min(percentage, 100)}%`;
+                                progressCurrent.textContent = progress.current.toString();
+                                progressTotal.textContent = progress.total.toString();
+                                currentTrackElement.textContent = progress.currentTrack;
+                                if (currentArtistElement)
+                                    currentArtistElement.textContent = progress.currentArtist || '';
+                            });
+
+                            tracks = result.tracks;
+                            const missingTracks = result.missingTracks;
+
+                            if (tracks.length === 0) {
+                                alert('No valid tracks found in the JSPF file! Please check the format.');
+                                progressElement.style.display = 'none';
+                                return;
+                            }
+                            console.log(`Imported ${tracks.length} tracks from JSPF`);
+
+                            // Auto-fill playlist metadata from JSPF if not provided
+                            const jspfData = result.jspfData;
+                            if (jspfData && jspfData.playlist) {
+                                const playlist = jspfData.playlist;
+                                if (!name && playlist.title) {
+                                    name = playlist.title;
+                                }
+                                if (!description && playlist.annotation) {
+                                    description = playlist.annotation;
+                                }
+                                if (!cover && playlist.image) {
+                                    cover = playlist.image;
+                                }
+                            }
+
+                            // Track JSPF import
+                            const jspfPlaylist = result.jspfData?.playlist;
+                            const jspfCreator =
+                                jspfPlaylist?.creator ||
+                                jspfPlaylist?.extension?.['https://musicbrainz.org/doc/jspf#playlist']?.creator ||
+                                'unknown';
+                            trackImportJSPF(
+                                name || jspfPlaylist?.title || 'Untitled',
+                                tracks.length,
+                                missingTracks.length,
+                                jspfCreator
+                            );
+
+                            if (missingTracks.length > 0) {
+                                setTimeout(() => {
+                                    showMissingTracksNotification(missingTracks);
+                                }, 500);
+                            }
+                        } catch (error) {
+                            console.error('Failed to parse JSPF!', error);
+                            alert('Failed to parse JSPF file! ' + error.message);
+                            progressElement.style.display = 'none';
+                            return;
+                        } finally {
+                            setTimeout(() => {
+                                progressElement.style.display = 'none';
+                            }, 1000);
+                        }
+                    } else if (csvFileInput.files.length > 0) {
+                        // Import from CSV
+                        importSource = 'csv_import';
+                        const file = csvFileInput.files[0];
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
+
+                        try {
                             progressElement.style.display = 'block';
                             progressFill.style.width = '0%';
                             progressCurrent.textContent = '0';
@@ -787,7 +1282,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                             }
                             console.log(`Imported ${tracks.length} tracks from CSV`);
 
-                            // if theres missing songs, warn the user
+                            trackImportCSV(name || 'Untitled', tracks.length, missingTracks.length);
+
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
                                     showMissingTracksNotification(missingTracks);
@@ -799,14 +1295,188 @@ document.addEventListener('DOMContentLoaded', async () => {
                             progressElement.style.display = 'none';
                             return;
                         } finally {
-                            // Hide progress bar
+                            setTimeout(() => {
+                                progressElement.style.display = 'none';
+                            }, 1000);
+                        }
+                    } else if (xspfFileInput.files.length > 0) {
+                        // Import from XSPF
+                        importSource = 'xspf_import';
+                        const file = xspfFileInput.files[0];
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
+
+                        try {
+                            progressElement.style.display = 'block';
+                            progressFill.style.width = '0%';
+                            progressCurrent.textContent = '0';
+                            currentTrackElement.textContent = 'Reading XSPF file...';
+                            if (currentArtistElement) currentArtistElement.textContent = '';
+
+                            const xspfText = await file.text();
+
+                            const result = await parseXSPF(xspfText, api, (progress) => {
+                                const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+                                progressFill.style.width = `${Math.min(percentage, 100)}%`;
+                                progressCurrent.textContent = progress.current.toString();
+                                progressTotal.textContent = progress.total.toString();
+                                currentTrackElement.textContent = progress.currentTrack;
+                                if (currentArtistElement)
+                                    currentArtistElement.textContent = progress.currentArtist || '';
+                            });
+
+                            tracks = result.tracks;
+                            const missingTracks = result.missingTracks;
+
+                            if (tracks.length === 0) {
+                                alert('No valid tracks found in the XSPF file! Please check the format.');
+                                progressElement.style.display = 'none';
+                                return;
+                            }
+                            console.log(`Imported ${tracks.length} tracks from XSPF`);
+
+                            trackImportXSPF(name || 'Untitled', tracks.length, missingTracks.length);
+
+                            if (missingTracks.length > 0) {
+                                setTimeout(() => {
+                                    showMissingTracksNotification(missingTracks);
+                                }, 500);
+                            }
+                        } catch (error) {
+                            console.error('Failed to parse XSPF!', error);
+                            alert('Failed to parse XSPF file! ' + error.message);
+                            progressElement.style.display = 'none';
+                            return;
+                        } finally {
+                            setTimeout(() => {
+                                progressElement.style.display = 'none';
+                            }, 1000);
+                        }
+                    } else if (xmlFileInput.files.length > 0) {
+                        // Import from XML
+                        importSource = 'xml_import';
+                        const file = xmlFileInput.files[0];
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
+
+                        try {
+                            progressElement.style.display = 'block';
+                            progressFill.style.width = '0%';
+                            progressCurrent.textContent = '0';
+                            currentTrackElement.textContent = 'Reading XML file...';
+                            if (currentArtistElement) currentArtistElement.textContent = '';
+
+                            const xmlText = await file.text();
+
+                            const result = await parseXML(xmlText, api, (progress) => {
+                                const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+                                progressFill.style.width = `${Math.min(percentage, 100)}%`;
+                                progressCurrent.textContent = progress.current.toString();
+                                progressTotal.textContent = progress.total.toString();
+                                currentTrackElement.textContent = progress.currentTrack;
+                                if (currentArtistElement)
+                                    currentArtistElement.textContent = progress.currentArtist || '';
+                            });
+
+                            tracks = result.tracks;
+                            const missingTracks = result.missingTracks;
+
+                            if (tracks.length === 0) {
+                                alert('No valid tracks found in the XML file! Please check the format.');
+                                progressElement.style.display = 'none';
+                                return;
+                            }
+                            console.log(`Imported ${tracks.length} tracks from XML`);
+
+                            trackImportXML(name || 'Untitled', tracks.length, missingTracks.length);
+
+                            if (missingTracks.length > 0) {
+                                setTimeout(() => {
+                                    showMissingTracksNotification(missingTracks);
+                                }, 500);
+                            }
+                        } catch (error) {
+                            console.error('Failed to parse XML!', error);
+                            alert('Failed to parse XML file! ' + error.message);
+                            progressElement.style.display = 'none';
+                            return;
+                        } finally {
+                            setTimeout(() => {
+                                progressElement.style.display = 'none';
+                            }, 1000);
+                        }
+                    } else if (m3uFileInput.files.length > 0) {
+                        // Import from M3U/M3U8
+                        importSource = 'm3u_import';
+                        const file = m3uFileInput.files[0];
+                        const {
+                            progressElement,
+                            progressFill,
+                            progressCurrent,
+                            progressTotal,
+                            currentTrackElement,
+                            currentArtistElement,
+                        } = setupProgressElements();
+
+                        try {
+                            progressElement.style.display = 'block';
+                            progressFill.style.width = '0%';
+                            progressCurrent.textContent = '0';
+                            currentTrackElement.textContent = 'Reading M3U file...';
+                            if (currentArtistElement) currentArtistElement.textContent = '';
+
+                            const m3uText = await file.text();
+
+                            const result = await parseM3U(m3uText, api, (progress) => {
+                                const percentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0;
+                                progressFill.style.width = `${Math.min(percentage, 100)}%`;
+                                progressCurrent.textContent = progress.current.toString();
+                                progressTotal.textContent = progress.total.toString();
+                                currentTrackElement.textContent = progress.currentTrack;
+                                if (currentArtistElement)
+                                    currentArtistElement.textContent = progress.currentArtist || '';
+                            });
+
+                            tracks = result.tracks;
+                            const missingTracks = result.missingTracks;
+
+                            if (tracks.length === 0) {
+                                alert('No valid tracks found in the M3U file! Please check the format.');
+                                progressElement.style.display = 'none';
+                                return;
+                            }
+                            console.log(`Imported ${tracks.length} tracks from M3U`);
+
+                            trackImportM3U(name || 'Untitled', tracks.length, missingTracks.length);
+
+                            if (missingTracks.length > 0) {
+                                setTimeout(() => {
+                                    showMissingTracksNotification(missingTracks);
+                                }, 500);
+                            }
+                        } catch (error) {
+                            console.error('Failed to parse M3U!', error);
+                            alert('Failed to parse M3U file! ' + error.message);
+                            progressElement.style.display = 'none';
+                            return;
+                        } finally {
                             setTimeout(() => {
                                 progressElement.style.display = 'none';
                             }, 1000);
                         }
                     }
-
-                    const cover = document.getElementById('playlist-cover-input').value.trim();
 
                     // Check for pending tracks (from Add to Playlist -> New Playlist)
                     const modal = document.getElementById('playlist-modal');
@@ -817,13 +1487,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                         console.log(`Added ${tracks.length} tracks (including pending)`);
                     }
 
-                    db.createPlaylist(name, tracks, cover).then(async (playlist) => {
+                    db.createPlaylist(name, tracks, cover, description).then(async (playlist) => {
                         await handlePublicStatus(playlist);
                         // Update DB again with isPublic flag
                         await db.performTransaction('user_playlists', 'readwrite', (store) => store.put(playlist));
                         await syncManager.syncUserPlaylist(playlist, 'create');
+                        trackCreatePlaylist(playlist, importSource);
                         ui.renderLibraryPage();
                         modal.classList.remove('active');
+                        trackCloseModal('Create Playlist');
                     });
                 }
             }
@@ -842,6 +1514,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     document.getElementById('playlist-modal-title').textContent = 'Edit Playlist';
                     document.getElementById('playlist-name-input').value = playlist.name;
                     document.getElementById('playlist-cover-input').value = playlist.cover || '';
+                    document.getElementById('playlist-description-input').value = playlist.description || '';
 
                     // Set Public Toggle
                     const publicToggle = document.getElementById('playlist-public-toggle');
@@ -854,13 +1527,36 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (shareBtn) {
                         shareBtn.style.display = playlist.isPublic ? 'flex' : 'none';
                         shareBtn.onclick = () => {
-                            const url = `${window.location.origin}/userplaylist/${playlist.id}`;
+                            const url = getShareUrl(`/userplaylist/${playlist.id}`);
                             navigator.clipboard.writeText(url).then(() => alert('Link copied to clipboard!'));
                         };
                     }
 
+                    // Set cover upload state - show URL input if there's an existing cover
+                    const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+                    const coverUrlInput = document.getElementById('playlist-cover-input');
+                    const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+                    if (playlist.cover) {
+                        if (coverUploadBtn) coverUploadBtn.style.display = 'none';
+                        if (coverUrlInput) coverUrlInput.style.display = 'block';
+                        if (coverToggleUrlBtn) {
+                            coverToggleUrlBtn.textContent = 'Upload';
+                            coverToggleUrlBtn.title = 'Switch to file upload';
+                        }
+                    } else {
+                        if (coverUploadBtn) {
+                            coverUploadBtn.style.flex = '1';
+                            coverUploadBtn.style.display = 'flex';
+                        }
+                        if (coverUrlInput) coverUrlInput.style.display = 'none';
+                        if (coverToggleUrlBtn) {
+                            coverToggleUrlBtn.textContent = 'or URL';
+                            coverToggleUrlBtn.title = 'Switch to URL input';
+                        }
+                    }
+
                     modal.dataset.editingId = playlistId;
-                    document.getElementById('csv-import-section').style.display = 'none';
+                    document.getElementById('import-section').style.display = 'none';
                     modal.classList.add('active');
                     document.getElementById('playlist-name-input').focus();
                 }
@@ -886,6 +1582,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     document.getElementById('playlist-modal-title').textContent = 'Edit Playlist';
                     document.getElementById('playlist-name-input').value = playlist.name;
                     document.getElementById('playlist-cover-input').value = playlist.cover || '';
+                    document.getElementById('playlist-description-input').value = playlist.description || '';
 
                     const publicToggle = document.getElementById('playlist-public-toggle');
                     const shareBtn = document.getElementById('playlist-share-btn');
@@ -894,13 +1591,36 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (shareBtn) {
                         shareBtn.style.display = playlist.isPublic ? 'flex' : 'none';
                         shareBtn.onclick = () => {
-                            const url = `${window.location.origin}/userplaylist/${playlist.id}`;
+                            const url = getShareUrl(`/userplaylist/${playlist.id}`);
                             navigator.clipboard.writeText(url).then(() => alert('Link copied to clipboard!'));
                         };
                     }
 
+                    // Set cover upload state - show URL input if there's an existing cover
+                    const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+                    const coverUrlInput = document.getElementById('playlist-cover-input');
+                    const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+                    if (playlist.cover) {
+                        if (coverUploadBtn) coverUploadBtn.style.display = 'none';
+                        if (coverUrlInput) coverUrlInput.style.display = 'block';
+                        if (coverToggleUrlBtn) {
+                            coverToggleUrlBtn.textContent = 'Upload';
+                            coverToggleUrlBtn.title = 'Switch to file upload';
+                        }
+                    } else {
+                        if (coverUploadBtn) {
+                            coverUploadBtn.style.flex = '1';
+                            coverUploadBtn.style.display = 'flex';
+                        }
+                        if (coverUrlInput) coverUrlInput.style.display = 'none';
+                        if (coverToggleUrlBtn) {
+                            coverToggleUrlBtn.textContent = 'or URL';
+                            coverToggleUrlBtn.title = 'Switch to URL input';
+                        }
+                    }
+
                     modal.dataset.editingId = playlistId;
-                    document.getElementById('csv-import-section').style.display = 'none';
+                    document.getElementById('import-section').style.display = 'none';
                     modal.classList.add('active');
                     document.getElementById('playlist-name-input').focus();
                 }
@@ -1063,7 +1783,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         document.getElementById('playlist-name-input').value = '';
                         document.getElementById('playlist-cover-input').value = '';
                         createModal.dataset.editingId = '';
-                        document.getElementById('csv-import-section').style.display = 'none'; // Hide CSV for simple add
+                        document.getElementById('import-section').style.display = 'none'; // Hide import for simple add
 
                         // Pass tracks
                         createModal._pendingTracks = tracks;
@@ -1243,6 +1963,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Local Files Logic lollll
         if (e.target.closest('#select-local-folder-btn') || e.target.closest('#change-local-folder-btn')) {
+            const isChange = e.target.closest('#change-local-folder-btn') !== null;
             try {
                 const handle = await window.showDirectoryPicker({
                     id: 'music-folder',
@@ -1250,6 +1971,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
 
                 await db.saveSetting('local_folder_handle', handle);
+                if (isChange) {
+                    trackChangeLocalFolder();
+                }
 
                 const btn = document.getElementById('select-local-folder-btn');
                 const btnText = document.getElementById('select-local-folder-text');
@@ -1294,6 +2018,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
 
                 window.localFilesCache = tracks;
+                trackSelectLocalFolder(tracks.length);
                 ui.renderLibraryPage();
             } catch (err) {
                 if (err.name !== 'AbortError') {
@@ -1392,6 +2117,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
+        // Close side panel (queue/lyrics) on navigation if setting is enabled
+        if (queueBehaviorSettings.shouldCloseOnNavigation()) {
+            sidePanelManager.close();
+        }
+
         await router();
         updateTabTitle(player);
     };
@@ -1419,14 +2149,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // PWA Update Logic
-    const updateSW = registerSW({
-        onNeedRefresh() {
-            showUpdateNotification(() => updateSW(true));
-        },
-        onOfflineReady() {
-            console.log('App ready to work offline');
-        },
-    });
+    if (window.__AUTH_GATE__) {
+        disablePwaForAuthGate();
+    } else {
+        const updateSW = registerSW({
+            onNeedRefresh() {
+                if (pwaUpdateSettings.isAutoUpdateEnabled()) {
+                    // Auto-update: immediately activate the new service worker
+                    trackPwaUpdate();
+                    updateSW(true);
+                } else {
+                    // Show notification with Update button and dismiss option
+                    showUpdateNotification(() => {
+                        trackPwaUpdate();
+                        updateSW(true);
+                    });
+                }
+            },
+            onOfflineReady() {
+                console.log('App ready to work offline');
+            },
+        });
+    }
 
     document.getElementById('show-shortcuts-btn')?.addEventListener('click', () => {
         showKeyboardShortcuts();
@@ -1507,6 +2251,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function showUpdateNotification(updateCallback) {
+    // Remove any existing update notification
+    const existingNotification = document.querySelector('.update-notification');
+    if (existingNotification) {
+        existingNotification.remove();
+    }
+
     const notification = document.createElement('div');
     notification.className = 'update-notification';
     notification.innerHTML = `
@@ -1514,7 +2264,15 @@ function showUpdateNotification(updateCallback) {
             <strong>Update Available</strong>
             <p>A new version of Monochrome is available.</p>
         </div>
-        <button class="btn-primary" id="update-now-btn">Update Now</button>
+        <div class="update-notification-actions">
+            <button class="btn-primary" id="update-now-btn">Update Now</button>
+            <button class="btn-icon" id="dismiss-update-btn" title="Dismiss">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
     `;
     document.body.appendChild(notification);
 
@@ -1527,13 +2285,24 @@ function showUpdateNotification(updateCallback) {
             window.location.reload();
         }
     });
+
+    document.getElementById('dismiss-update-btn').addEventListener('click', () => {
+        trackDismissUpdate();
+        notification.remove();
+    });
 }
 
 function showMissingTracksNotification(missingTracks) {
     const modal = document.getElementById('missing-tracks-modal');
     const listUl = document.getElementById('missing-tracks-list-ul');
 
-    listUl.innerHTML = missingTracks.map((track) => `<li>${track}</li>`).join('');
+    listUl.innerHTML = missingTracks
+        .map((track) => {
+            const text =
+                typeof track === 'string' ? track : `${track.artist ? track.artist + ' - ' : ''}${track.title}`;
+            return `<li>${text}</li>`;
+        })
+        .join('');
 
     const closeModal = () => modal.classList.remove('active');
 
@@ -1553,298 +2322,6 @@ function showMissingTracksNotification(missingTracks) {
 
     modal.addEventListener('click', handleClose);
     modal.classList.add('active');
-}
-
-async function parseCSV(csvText, api, onProgress) {
-    const lines = csvText.trim().split('\n');
-    if (lines.length < 2) return [];
-
-    // Robust CSV line parser that respects quotes
-    const parseLine = (text) => {
-        const values = [];
-        let current = '';
-        let inQuote = false;
-
-        for (let i = 0; i < text.length; i++) {
-            const char = text[i];
-
-            if (char === '"') {
-                inQuote = !inQuote;
-            } else if (char === ',' && !inQuote) {
-                values.push(current);
-                current = '';
-            } else {
-                current += char;
-            }
-        }
-        values.push(current);
-
-        // Clean up quotes: remove surrounding quotes and unescape double quotes if any
-        return values.map((v) => v.trim().replace(/^"|"$/g, '').replace(/""/g, '"').trim());
-    };
-
-    const headers = parseLine(lines[0]);
-    const rows = lines.slice(1);
-
-    const tracks = [];
-    const missingTracks = [];
-    const totalTracks = rows.length;
-
-    for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row.trim()) continue; // Skip empty lines
-
-        const values = parseLine(row);
-
-        if (values.length >= headers.length) {
-            let trackTitle = '';
-            let artistNames = '';
-            let albumName = '';
-
-            headers.forEach((header, index) => {
-                const value = values[index];
-                if (!value) return;
-
-                switch (header.toLowerCase()) {
-                    case 'track name':
-                    case 'title':
-                    case 'song':
-                        trackTitle = value;
-                        break;
-                    case 'artist name(s)':
-                    case 'artist name':
-                    case 'artist':
-                    case 'artists':
-                        artistNames = value;
-                        break;
-                    case 'album':
-                    case 'album name':
-                        albumName = value;
-                        break;
-                }
-            });
-
-            if (onProgress) {
-                onProgress({
-                    current: i,
-                    total: totalTracks,
-                    currentTrack: trackTitle || 'Unknown track',
-                    currentArtist: artistNames || '',
-                });
-            }
-
-            // Search for the track in hifi tidal api's catalog
-            if (trackTitle && artistNames) {
-                // Add a small delay to prevent rate limiting
-                await new Promise((resolve) => setTimeout(resolve, 300));
-
-                try {
-                    let foundTrack = null;
-
-                    // Helper: Normalize strings for fuzzy matching
-                    const normalize = (str) =>
-                        str
-                            .normalize('NFD')
-                            .replace(/[\u0300-\u036f]/g, '')
-                            .toLowerCase()
-                            .replace(/[^\w\s]/g, ' ')
-                            .replace(/\s+/g, ' ')
-                            .trim();
-
-                    // Helper: Check if result matches our criteria
-                    const isValidMatch = (track, title, artists, album) => {
-                        if (!track) return false;
-
-                        const trackTitle = normalize(track.title || '');
-                        const trackArtists = (track.artists || []).map((a) => normalize(a.name || '')).join(' ');
-                        const trackAlbum = normalize(track.album?.name || '');
-
-                        const queryTitle = normalize(title);
-                        const queryArtists = normalize(artists);
-                        const queryAlbum = normalize(album || '');
-
-                        // Must match title (exact or substring match)
-                        const titleMatch =
-                            trackTitle === queryTitle ||
-                            trackTitle.includes(queryTitle) ||
-                            queryTitle.includes(trackTitle);
-                        if (!titleMatch) return false;
-
-                        // Must match at least one artist
-                        const artistMatch =
-                            trackArtists.includes(queryArtists.split(' ')[0]) ||
-                            queryArtists.includes(trackArtists.split(' ')[0]);
-                        if (!artistMatch) return false;
-
-                        // If album provided, prefer matching album but not strict
-                        if (queryAlbum) {
-                            const albumMatch =
-                                trackAlbum === queryAlbum ||
-                                trackAlbum.includes(queryAlbum) ||
-                                queryAlbum.includes(trackAlbum);
-                            return albumMatch;
-                        }
-
-                        return true;
-                    };
-
-                    // 1. Initial Search: Title + All Artists + Album (most specific)
-                    if (!foundTrack) {
-                        let searchQuery = `${trackTitle} ${artistNames}`;
-                        if (albumName) searchQuery += ` ${albumName}`;
-                        const searchResults = await api.searchTracks(searchQuery);
-
-                        if (searchResults.items && searchResults.items.length > 0) {
-                            // Try to find best match within results
-                            for (const result of searchResults.items) {
-                                if (isValidMatch(result, trackTitle, artistNames, albumName)) {
-                                    foundTrack = result;
-                                    break;
-                                }
-                            }
-                            // Fallback: if no valid match found, use first result only if album matches
-                            if (!foundTrack && albumName) {
-                                const firstResult = searchResults.items[0];
-                                if (isValidMatch(firstResult, trackTitle, artistNames, albumName)) {
-                                    foundTrack = firstResult;
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. Retry: Title + Main Artist + Album
-                    if (!foundTrack && artistNames) {
-                        const mainArtist = artistNames.split(',')[0].trim();
-                        if (mainArtist && mainArtist !== artistNames) {
-                            let searchQuery = `${trackTitle} ${mainArtist}`;
-                            if (albumName) searchQuery += ` ${albumName}`;
-                            const searchResults = await api.searchTracks(searchQuery);
-
-                            if (searchResults.items && searchResults.items.length > 0) {
-                                for (const result of searchResults.items) {
-                                    if (isValidMatch(result, trackTitle, mainArtist, albumName)) {
-                                        foundTrack = result;
-                                        console.log(`Found (Retry 1 - Main Artist): ${trackTitle}`);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. Retry: Just Title + Album (strong album context)
-                    if (!foundTrack && albumName) {
-                        const searchQuery = `${trackTitle} ${albumName}`;
-                        const searchResults = await api.searchTracks(searchQuery);
-
-                        if (searchResults.items && searchResults.items.length > 0) {
-                            for (const result of searchResults.items) {
-                                if (isValidMatch(result, trackTitle, artistNames, albumName)) {
-                                    foundTrack = result;
-                                    console.log(`Found (Retry 2 - Album): ${trackTitle}`);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Clean title for retry strategies
-                    // Remove " - ", "(feat. ...)", "[feat. ...]"
-                    const cleanTitle = (t) =>
-                        t
-                            .split(' - ')[0]
-                            .replace(/\s*[([]feat\.?.*?[)\]]/i, '')
-                            .trim();
-                    const cleanedTitle = cleanTitle(trackTitle);
-                    const isTitleCleaned = cleanedTitle !== trackTitle;
-
-                    // 4. Retry: Cleaned Title + Main Artist + Album
-                    if (!foundTrack && isTitleCleaned) {
-                        const mainArtist = (artistNames || '').split(',')[0].trim();
-                        if (cleanedTitle) {
-                            let searchQuery = `${cleanedTitle} ${mainArtist}`;
-                            if (albumName) searchQuery += ` ${albumName}`;
-                            const searchResults = await api.searchTracks(searchQuery);
-
-                            if (searchResults.items && searchResults.items.length > 0) {
-                                for (const result of searchResults.items) {
-                                    if (isValidMatch(result, cleanedTitle, mainArtist, albumName)) {
-                                        foundTrack = result;
-                                        console.log(`Found (Retry 3 - Cleaned Title): ${trackTitle}`);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 5. Retry: Title + Main Artist (Ignore Album in Query and Match)
-                    if (!foundTrack) {
-                        const mainArtist = (artistNames || '').split(',')[0].trim();
-                        // Search WITHOUT album name to find tracks where album metadata differs
-                        const searchQuery = `${trackTitle} ${mainArtist}`;
-                        const searchResults = await api.searchTracks(searchQuery);
-
-                        if (searchResults.items && searchResults.items.length > 0) {
-                            for (const result of searchResults.items) {
-                                // Pass null for album to ignore it in validation
-                                if (isValidMatch(result, trackTitle, mainArtist, null)) {
-                                    foundTrack = result;
-                                    console.log(`Found (Retry 4 - Ignore Album): ${trackTitle}`);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // 6. Retry: Cleaned Title + Main Artist (Ignore Album in Query and Match)
-                    if (!foundTrack && isTitleCleaned) {
-                        const mainArtist = (artistNames || '').split(',')[0].trim();
-                        const searchQuery = `${cleanedTitle} ${mainArtist}`;
-                        const searchResults = await api.searchTracks(searchQuery);
-
-                        if (searchResults.items && searchResults.items.length > 0) {
-                            for (const result of searchResults.items) {
-                                if (isValidMatch(result, cleanedTitle, mainArtist, null)) {
-                                    foundTrack = result;
-                                    console.log(`Found (Retry 5 - Cleaned Title + Ignore Album): ${trackTitle}`);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (foundTrack) {
-                        tracks.push(foundTrack);
-                        console.log(`✓ "${trackTitle}" by ${artistNames}${albumName ? ' [' + albumName + ']' : ''}`);
-                    } else {
-                        console.warn(
-                            `✗ Track not found: "${trackTitle}" by ${artistNames}${albumName ? ' [' + albumName + ']' : ''}`
-                        );
-                        missingTracks.push(
-                            `${trackTitle} - ${artistNames}${albumName ? ' (album: ' + albumName + ')' : ''}`
-                        );
-                    }
-                } catch (error) {
-                    console.error(`Error searching for track "${trackTitle}":`, error);
-                    missingTracks.push(
-                        `${trackTitle} - ${artistNames}${albumName ? ' (album: ' + albumName + ')' : ''}`
-                    );
-                }
-            }
-        }
-    }
-
-    // yayyy its finished :P
-    if (onProgress) {
-        onProgress({
-            current: totalTracks,
-            total: totalTracks,
-            currentTrack: 'Import complete',
-        });
-    }
-
-    return { tracks, missingTracks };
 }
 
 function showDiscographyDownloadModal(artist, api, quality, lyricsManager, triggerBtn) {

@@ -9,6 +9,8 @@ import {
     formatTime,
     SVG_BIN,
     getTrackArtists,
+    positionMenu,
+    getShareUrl,
 } from './utils.js';
 import { lastFMStorage, libreFmSettings, waveformSettings } from './storage.js';
 import { showNotification, downloadTrackWithMetadata, downloadAlbumAsZip, downloadPlaylistAsZip } from './downloads.js';
@@ -18,6 +20,37 @@ import { db } from './db.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { waveformGenerator } from './waveform.js';
 import { audioContextManager } from './audio-context.js';
+import {
+    trackPlayTrack,
+    trackPauseTrack,
+    trackSkipTrack,
+    trackToggleShuffle,
+    trackToggleRepeat,
+    trackSeek,
+    trackAddToQueue,
+    trackPlayNext,
+    trackLikeTrack,
+    trackUnlikeTrack,
+    trackLikeAlbum,
+    trackUnlikeAlbum,
+    trackLikeArtist,
+    trackUnlikeArtist,
+    trackLikePlaylist,
+    trackUnlikePlaylist,
+    trackDownloadTrack,
+    trackContextMenuAction,
+    trackBlockTrack,
+    trackUnblockTrack,
+    trackBlockAlbum,
+    trackUnblockAlbum,
+    trackBlockArtist,
+    trackUnblockArtist,
+    trackCopyLink,
+    trackOpenInNewTab,
+    trackSetSleepTimer,
+    trackCancelSleepTimer,
+    trackStartMix,
+} from './analytics.js';
 
 let currentTrackIdForWaveform = null;
 
@@ -60,14 +93,12 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
         audioContextManager.resume();
 
         if (player.currentTrack) {
+            // Track play event
+            trackPlayTrack(player.currentTrack);
+
             // Scrobble
             if (scrobbler.isAuthenticated()) {
                 scrobbler.updateNowPlaying(player.currentTrack);
-            }
-
-            // Resume AudioContext for waveform on mobile (iOS)
-            if (waveformGenerator.audioContext.state === 'suspended') {
-                waveformGenerator.audioContext.resume();
             }
 
             updateWaveform();
@@ -85,6 +116,9 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
     });
 
     audioPlayer.addEventListener('pause', () => {
+        if (player.currentTrack) {
+            trackPauseTrack(player.currentTrack);
+        }
         playPauseBtn.innerHTML = SVG_PLAY;
         player.updateMediaSessionPlaybackState();
         player.updateMediaSessionPositionState();
@@ -101,6 +135,9 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
             const currentTimeEl = document.getElementById('current-time');
             progressFill.style.width = `${(currentTime / duration) * 100}%`;
             currentTimeEl.textContent = formatTime(currentTime);
+
+            // Track seek milestones
+            trackSeek(currentTime, duration);
 
             // Log to history after 10 seconds of playback
             if (currentTime >= 10 && player.currentTrack && player.currentTrack.id !== historyLoggedTrackId) {
@@ -177,17 +214,25 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
     });
 
     playPauseBtn.addEventListener('click', () => player.handlePlayPause());
-    nextBtn.addEventListener('click', () => player.playNext());
-    prevBtn.addEventListener('click', () => player.playPrev());
+    nextBtn.addEventListener('click', () => {
+        trackSkipTrack(player.currentTrack, 'next');
+        player.playNext();
+    });
+    prevBtn.addEventListener('click', () => {
+        trackSkipTrack(player.currentTrack, 'previous');
+        player.playPrev();
+    });
 
     shuffleBtn.addEventListener('click', () => {
         player.toggleShuffle();
+        trackToggleShuffle(player.shuffleActive);
         shuffleBtn.classList.toggle('active', player.shuffleActive);
         if (window.renderQueueFunction) window.renderQueueFunction();
     });
 
     repeatBtn.addEventListener('click', () => {
         const mode = player.toggleRepeat();
+        trackToggleRepeat(mode === REPEAT_MODE.OFF ? 'off' : mode === REPEAT_MODE.ALL ? 'all' : 'one');
         repeatBtn.classList.toggle('active', mode !== REPEAT_MODE.OFF);
         repeatBtn.classList.toggle('repeat-one', mode === REPEAT_MODE.ONE);
         repeatBtn.title =
@@ -199,6 +244,7 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
         sleepTimerBtnDesktop.addEventListener('click', () => {
             if (player.isSleepTimerActive()) {
                 player.clearSleepTimer();
+                trackCancelSleepTimer();
                 showNotification('Sleep timer cancelled');
             } else {
                 showSleepTimerModal(player);
@@ -211,6 +257,7 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
         sleepTimerBtnMobile.addEventListener('click', () => {
             if (player.isSleepTimerActive()) {
                 player.clearSleepTimer();
+                trackCancelSleepTimer();
                 showNotification('Sleep timer cancelled');
             } else {
                 showSleepTimerModal(player);
@@ -649,8 +696,24 @@ export async function showAddToPlaylistModal(track) {
             document.getElementById('playlist-modal-title').textContent = 'Create Playlist';
             document.getElementById('playlist-name-input').value = '';
             document.getElementById('playlist-cover-input').value = '';
+            document.getElementById('playlist-cover-file-input').value = '';
+            document.getElementById('playlist-description-input').value = '';
             createModal.dataset.editingId = '';
-            document.getElementById('csv-import-section').style.display = 'none';
+            document.getElementById('import-section').style.display = 'none';
+
+            // Reset cover upload state
+            const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+            const coverUrlInput = document.getElementById('playlist-cover-input');
+            const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+            if (coverUploadBtn) {
+                coverUploadBtn.style.flex = '1';
+                coverUploadBtn.style.display = 'flex';
+            }
+            if (coverUrlInput) coverUrlInput.style.display = 'none';
+            if (coverToggleUrlBtn) {
+                coverToggleUrlBtn.textContent = 'or URL';
+                coverToggleUrlBtn.title = 'Switch to URL input';
+            }
 
             // Pass track
             createModal._pendingTracks = [track];
@@ -725,6 +788,13 @@ export async function handleTrackAction(
 
     if (isCollection && collectionActions.includes(action)) {
         try {
+            // Check if album/artist is blocked
+            const { contentBlockingSettings } = await import('./storage.js');
+            if (type === 'album' && contentBlockingSettings.shouldHideAlbum(item)) {
+                showNotification('This album is blocked');
+                return;
+            }
+
             let tracks = [];
             let collectionItem = item;
 
@@ -778,6 +848,9 @@ export async function handleTrackAction(
                 }
                 return;
             }
+
+            // Filter blocked tracks from collections
+            tracks = contentBlockingSettings.filterTracks(tracks);
 
             if (action === 'add-to-queue') {
                 player.addToQueue(tracks);
@@ -833,12 +906,30 @@ export async function handleTrackAction(
         return;
     }
 
+    if (action === 'toggle-pin') {
+        const pinned = await db.togglePinned(item, type);
+        showNotification(pinned ? `Pinned to sidebar` : `Unpinned from sidebar`);
+
+        if (ui && typeof ui.renderPinnedItems === 'function') {
+            ui.renderPinnedItems();
+        }
+    }
+
     // Individual Track Actions
+    // Check if track/artist is blocked
+    const { contentBlockingSettings } = await import('./storage.js');
+    if (type === 'track' && contentBlockingSettings.shouldHideTrack(item)) {
+        showNotification('This track is blocked');
+        return;
+    }
+
     if (action === 'add-to-queue') {
+        trackAddToQueue(item, 'end');
         player.addToQueue(item);
         if (window.renderQueueFunction) window.renderQueueFunction();
         showNotification(`Added to queue: ${item.title}`);
     } else if (action === 'play-next') {
+        trackPlayNext(item);
         player.addNextToQueue(item);
         if (window.renderQueueFunction) window.renderQueueFunction();
         showNotification(`Playing next: ${item.title}`);
@@ -847,16 +938,31 @@ export async function handleTrackAction(
         player.playAtIndex(0);
         showNotification(`Playing track: ${item.title}`);
     } else if (action === 'start-mix') {
+        trackStartMix(type, item);
         if (item.mixes?.TRACK_MIX) {
             navigate(`/mix/${item.mixes.TRACK_MIX}`);
         } else {
             showNotification('No mix available for this track');
         }
     } else if (action === 'download') {
+        trackDownloadTrack(item, downloadQualitySettings.getQuality());
         await downloadTrackWithMetadata(item, downloadQualitySettings.getQuality(), api, lyricsManager);
     } else if (action === 'toggle-like') {
         const added = await db.toggleFavorite(type, item);
         syncManager.syncLibraryItem(type, item, added);
+
+        // Track like/unlike
+        if (added) {
+            if (type === 'track') trackLikeTrack(item);
+            else if (type === 'album') trackLikeAlbum(item);
+            else if (type === 'artist') trackLikeArtist(item);
+            else if (type === 'playlist' || type === 'user-playlist') trackLikePlaylist(item);
+        } else {
+            if (type === 'track') trackUnlikeTrack(item);
+            else if (type === 'album') trackUnlikeAlbum(item);
+            else if (type === 'artist') trackUnlikeArtist(item);
+            else if (type === 'playlist' || type === 'user-playlist') trackUnlikePlaylist(item);
+        }
 
         if (added && type === 'track' && scrobbler) {
             if (lastFMStorage.isEnabled() && lastFMStorage.shouldLoveOnLike()) {
@@ -1005,8 +1111,24 @@ export async function handleTrackAction(
                 document.getElementById('playlist-modal-title').textContent = 'Create Playlist';
                 document.getElementById('playlist-name-input').value = '';
                 document.getElementById('playlist-cover-input').value = '';
+                document.getElementById('playlist-cover-file-input').value = '';
+                document.getElementById('playlist-description-input').value = '';
                 createModal.dataset.editingId = '';
-                document.getElementById('csv-import-section').style.display = 'none';
+                document.getElementById('import-section').style.display = 'none';
+
+                // Reset cover upload state
+                const coverUploadBtn = document.getElementById('playlist-cover-upload-btn');
+                const coverUrlInput = document.getElementById('playlist-cover-input');
+                const coverToggleUrlBtn = document.getElementById('playlist-cover-toggle-url-btn');
+                if (coverUploadBtn) {
+                    coverUploadBtn.style.flex = '1';
+                    coverUploadBtn.style.display = 'flex';
+                }
+                if (coverUrlInput) coverUrlInput.style.display = 'none';
+                if (coverToggleUrlBtn) {
+                    coverToggleUrlBtn.textContent = 'or URL';
+                    coverToggleUrlBtn.title = 'Switch to URL input';
+                }
 
                 // Pass track
                 createModal._pendingTracks = [item];
@@ -1060,10 +1182,9 @@ export async function handleTrackAction(
         // Use stored href from card if available, otherwise construct URL
         const contextMenu = document.getElementById('context-menu');
         const storedHref = contextMenu?._contextHref;
-        const url = storedHref
-            ? `${window.location.origin}${storedHref}`
-            : `${window.location.origin}/track/${item.id || item.uuid}`;
+        const url = getShareUrl(storedHref ? storedHref : `/track/${item.id || item.uuid}`);
 
+        trackCopyLink(type, item.id || item.uuid);
         navigator.clipboard.writeText(url).then(() => {
             showNotification('Link copied to clipboard!');
         });
@@ -1075,6 +1196,7 @@ export async function handleTrackAction(
             ? `${window.location.origin}${storedHref}`
             : `${window.location.origin}/track/${item.id || item.uuid}`;
 
+        trackOpenInNewTab(type, item.id || item.uuid);
         window.open(url, '_blank');
     } else if (action === 'track-info') {
         // Show detailed track info modal
@@ -1240,6 +1362,60 @@ export async function handleTrackAction(
         } else {
             showNotification('No original URL available for this track.');
         }
+    } else if (action === 'block-track') {
+        const { contentBlockingSettings } = await import('./storage.js');
+        if (contentBlockingSettings.isTrackBlocked(item.id)) {
+            contentBlockingSettings.unblockTrack(item.id);
+            trackUnblockTrack(item);
+            showNotification(`Unblocked track: ${item.title}`);
+        } else {
+            contentBlockingSettings.blockTrack(item);
+            trackBlockTrack(item);
+            showNotification(`Blocked track: ${item.title}`);
+        }
+    } else if (action === 'block-album') {
+        const { contentBlockingSettings } = await import('./storage.js');
+        const albumId = type === 'album' ? item.id : item.album?.id;
+        const albumTitle = type === 'album' ? item.title : item.album?.title;
+        const albumArtist = type === 'album' ? item.artist : item.album?.artist;
+
+        if (!albumId) {
+            showNotification('No album information available');
+            return;
+        }
+
+        const albumObj = { id: albumId, title: albumTitle, artist: albumArtist };
+
+        if (contentBlockingSettings.isAlbumBlocked(albumId)) {
+            contentBlockingSettings.unblockAlbum(albumId);
+            trackUnblockAlbum(albumObj);
+            showNotification(`Unblocked album: ${albumTitle || 'Unknown Album'}`);
+        } else {
+            contentBlockingSettings.blockAlbum(albumObj);
+            trackBlockAlbum(albumObj);
+            showNotification(`Blocked album: ${albumTitle || 'Unknown Album'}`);
+        }
+    } else if (action === 'block-artist') {
+        const { contentBlockingSettings } = await import('./storage.js');
+        const artistId = item.artist?.id || item.artists?.[0]?.id;
+        const artistName = item.artist?.name || item.artists?.[0]?.name || item.name;
+
+        if (!artistId) {
+            showNotification('No artist information available');
+            return;
+        }
+
+        const artistObj = { id: artistId, name: artistName };
+
+        if (contentBlockingSettings.isArtistBlocked(artistId)) {
+            contentBlockingSettings.unblockArtist(artistId);
+            trackUnblockArtist(artistObj);
+            showNotification(`Unblocked artist: ${artistName || 'Unknown Artist'}`);
+        } else {
+            contentBlockingSettings.blockArtist(artistObj);
+            trackBlockArtist(artistObj);
+            showNotification(`Blocked artist: ${artistName || 'Unknown Artist'}`);
+        }
     }
 }
 
@@ -1248,9 +1424,14 @@ async function updateContextMenuLikeState(contextMenu, contextTrack) {
 
     const likeItem = contextMenu.querySelector('li[data-action="toggle-like"]');
     if (likeItem) {
-        const { db } = await import('./db.js');
         const isLiked = await db.isFavorite('track', contextTrack.id);
         likeItem.textContent = isLiked ? 'Unlike' : 'Like';
+    }
+
+    const pinItem = contextMenu.querySelector('li[data-action="toggle-pin"]');
+    if (pinItem) {
+        const isPinned = await db.isPinned(contextTrack.id || contextTrack.uuid);
+        pinItem.textContent = isPinned ? 'Unpin' : 'Pin';
     }
 
     const trackMixItem = contextMenu.querySelector('li[data-action="track-mix"]');
@@ -1266,8 +1447,37 @@ async function updateContextMenuLikeState(contextMenu, contextTrack) {
         openOriginalUrlItem.style.display = isUnreleased ? 'block' : 'none';
     }
 
-    // Filter items based on type
+    // Update block/unblock labels
+    const { contentBlockingSettings } = await import('./storage.js');
     const type = contextMenu._contextType || 'track';
+
+    const blockTrackItem = contextMenu.querySelector('li[data-action="block-track"]');
+    if (blockTrackItem) {
+        const isBlocked = contentBlockingSettings.isTrackBlocked(contextTrack.id);
+        blockTrackItem.textContent = isBlocked
+            ? blockTrackItem.dataset.labelUnblock || 'Unblock track'
+            : blockTrackItem.dataset.labelBlock || 'Block track';
+    }
+
+    const blockAlbumItem = contextMenu.querySelector('li[data-action="block-album"]');
+    if (blockAlbumItem) {
+        const albumId = type === 'album' ? contextTrack.id : contextTrack.album?.id;
+        const isBlocked = albumId ? contentBlockingSettings.isAlbumBlocked(albumId) : false;
+        blockAlbumItem.textContent = isBlocked
+            ? blockAlbumItem.dataset.labelUnblock || 'Unblock album'
+            : blockAlbumItem.dataset.labelBlock || 'Block album';
+    }
+
+    const blockArtistItem = contextMenu.querySelector('li[data-action="block-artist"]');
+    if (blockArtistItem) {
+        const artistId = contextTrack.artist?.id || contextTrack.artists?.[0]?.id;
+        const isBlocked = artistId ? contentBlockingSettings.isArtistBlocked(artistId) : false;
+        blockArtistItem.textContent = isBlocked
+            ? blockArtistItem.dataset.labelUnblock || 'Unblock artist'
+            : blockArtistItem.dataset.labelBlock || 'Block artist';
+    }
+
+    // Filter items based on type
     contextMenu.querySelectorAll('li[data-action]').forEach((item) => {
         const filter = item.dataset.typeFilter;
         if (filter) {
@@ -1388,7 +1598,7 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
         }
 
         const trackItem = e.target.closest('.track-item');
-        if (trackItem && trackItem.classList.contains('unavailable')) {
+        if (trackItem && (trackItem.classList.contains('unavailable') || trackItem.classList.contains('blocked'))) {
             return;
         }
         if (trackItem && !trackItem.dataset.queueIndex && !e.target.closest('.remove-from-playlist-btn')) {
@@ -1408,6 +1618,11 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
 
         const card = e.target.closest('.card');
         if (card) {
+            // Don't navigate if card is blocked (unless clicking menu button)
+            if (card.classList.contains('blocked') && !e.target.closest('.card-menu-btn')) {
+                return;
+            }
+
             if (e.target.closest('.edit-playlist-btn') || e.target.closest('.delete-playlist-btn')) {
                 return;
             }
@@ -1425,6 +1640,8 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
 
     mainContent.addEventListener('contextmenu', async (e) => {
         const trackItem = e.target.closest('.track-item, .queue-track-item');
+        const card = e.target.closest('.card');
+
         if (trackItem) {
             e.preventDefault();
             if (trackItem.classList.contains('queue-track-item')) {
@@ -1450,30 +1667,7 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
                 contextMenu._contextTrack = contextTrack;
                 contextMenu._contextType = 'track';
                 await updateContextMenuLikeState(contextMenu, contextTrack);
-                positionMenu(contextMenu, e.pageX, e.pageY);
-            }
-        }
-    });
-
-    mainContent.addEventListener('contextmenu', async (e) => {
-        const trackItem = e.target.closest('.track-item, .queue-track-item');
-        const card = e.target.closest('.card');
-
-        if (trackItem) {
-            e.preventDefault();
-            if (trackItem.classList.contains('queue-track-item')) {
-                const queueIndex = parseInt(trackItem.dataset.queueIndex);
-                contextTrack = player.getCurrentQueue()[queueIndex];
-            } else {
-                contextTrack = trackDataStore.get(trackItem);
-            }
-
-            if (contextTrack) {
-                if (contextTrack.isLocal) return;
-                contextMenu._contextTrack = contextTrack;
-                contextMenu._contextType = 'track';
-                await updateContextMenuLikeState(contextMenu, contextTrack);
-                positionMenu(contextMenu, e.pageX, e.pageY);
+                positionMenu(contextMenu, e.clientX, e.clientY);
             }
         } else if (card) {
             e.preventDefault();
@@ -1499,7 +1693,7 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
             contextMenu._contextHref = card.dataset.href;
 
             await updateContextMenuLikeState(contextMenu, item);
-            positionMenu(contextMenu, e.pageX, e.pageY);
+            positionMenu(contextMenu, e.clientX, e.clientY);
         }
     });
 
@@ -1516,6 +1710,8 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
         const track = contextMenu._contextTrack || contextTrack;
         const type = contextMenu._contextType || 'track';
         if (action && track) {
+            // Track context menu action
+            trackContextMenuAction(action, type, track);
             await handleTrackAction(action, track, player, api, lyricsManager, type, ui, scrobbler);
         }
         contextMenu.style.display = 'none';
@@ -1670,6 +1866,7 @@ function showSleepTimerModal(player) {
 
             if (minutes) {
                 player.setSleepTimer(minutes);
+                trackSetSleepTimer(minutes);
                 showNotification(`Sleep timer set for ${minutes} minute${minutes === 1 ? '' : 's'}`);
                 closeModal();
             }
@@ -1691,44 +1888,4 @@ function showSleepTimerModal(player) {
     modal.addEventListener('click', handleCancel);
 
     modal.classList.add('active');
-}
-
-function positionMenu(menu, x, y, anchorRect = null) {
-    // Temporarily show to measure dimensions
-    menu.style.visibility = 'hidden';
-    menu.style.display = 'block';
-
-    const menuWidth = menu.offsetWidth;
-    const menuHeight = menu.offsetHeight;
-    const windowWidth = window.innerWidth;
-    const windowHeight = window.innerHeight;
-
-    let left = x;
-    let top = y;
-
-    if (anchorRect) {
-        // Adjust horizontal position if it overflows right
-        if (left + menuWidth > windowWidth - 10) {
-            // 10px buffer
-            left = anchorRect.right - menuWidth;
-            if (left < 10) left = 10;
-        }
-        // Adjust vertical position if it overflows bottom
-        if (top + menuHeight > windowHeight - 10) {
-            top = anchorRect.top - menuHeight - 5;
-        }
-    } else {
-        // Adjust horizontal position if it overflows right
-        if (left + menuWidth > windowWidth - 10) {
-            left = windowWidth - menuWidth - 10;
-        }
-        // Adjust vertical position if it overflows bottom
-        if (top + menuHeight > windowHeight - 10) {
-            top = y - menuHeight;
-        }
-    }
-
-    menu.style.top = `${top}px`;
-    menu.style.left = `${left}px`;
-    menu.style.visibility = 'visible';
 }

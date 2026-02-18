@@ -86,7 +86,7 @@ export const apiSettings = {
         }
     },
 
-    async getInstances(type = 'api', sortBySpeed = false) {
+    async getInstances(type = 'api', _sortBySpeed = false) {
         let instancesObj;
 
         const stored = localStorage.getItem(this.STORAGE_KEY);
@@ -282,6 +282,9 @@ export const lastFMStorage = {
     STORAGE_KEY: 'lastfm-enabled',
     LOVE_ON_LIKE_KEY: 'lastfm-love-on-like',
     SCROBBLE_PERCENTAGE_KEY: 'lastfm-scrobble-percentage',
+    CUSTOM_API_KEY: 'lastfm-custom-api-key',
+    CUSTOM_API_SECRET: 'lastfm-custom-api-secret',
+    USE_CUSTOM_CREDENTIALS_KEY: 'lastfm-use-custom-credentials',
 
     isEnabled() {
         try {
@@ -319,6 +322,48 @@ export const lastFMStorage = {
     setScrobblePercentage(percentage) {
         const validPercentage = Math.max(1, Math.min(100, parseInt(percentage, 10) || 75));
         localStorage.setItem(this.SCROBBLE_PERCENTAGE_KEY, validPercentage.toString());
+    },
+
+    useCustomCredentials() {
+        try {
+            return localStorage.getItem(this.USE_CUSTOM_CREDENTIALS_KEY) === 'true';
+        } catch {
+            return false;
+        }
+    },
+
+    setUseCustomCredentials(enabled) {
+        localStorage.setItem(this.USE_CUSTOM_CREDENTIALS_KEY, enabled ? 'true' : 'false');
+    },
+
+    getCustomApiKey() {
+        try {
+            return localStorage.getItem(this.CUSTOM_API_KEY) || '';
+        } catch {
+            return '';
+        }
+    },
+
+    setCustomApiKey(key) {
+        localStorage.setItem(this.CUSTOM_API_KEY, key);
+    },
+
+    getCustomApiSecret() {
+        try {
+            return localStorage.getItem(this.CUSTOM_API_SECRET) || '';
+        } catch {
+            return '';
+        }
+    },
+
+    setCustomApiSecret(secret) {
+        localStorage.setItem(this.CUSTOM_API_SECRET, secret);
+    },
+
+    clearCustomCredentials() {
+        localStorage.removeItem(this.CUSTOM_API_KEY);
+        localStorage.removeItem(this.CUSTOM_API_SECRET);
+        localStorage.removeItem(this.USE_CUSTOM_CREDENTIALS_KEY);
     },
 };
 
@@ -639,9 +684,9 @@ export const visualizerSettings = {
 
     getPreset() {
         try {
-            return localStorage.getItem(this.PRESET_KEY) || 'lcd';
+            return localStorage.getItem(this.PRESET_KEY) || 'butterchurn';
         } catch {
-            return 'lcd';
+            return 'butterchurn';
         }
     },
 
@@ -746,6 +791,27 @@ export const equalizerSettings = {
     ENABLED_KEY: 'equalizer-enabled',
     GAINS_KEY: 'equalizer-gains',
     PRESET_KEY: 'equalizer-preset',
+    CUSTOM_PRESETS_KEY: 'equalizer-custom-presets',
+    BAND_COUNT_KEY: 'equalizer-band-count',
+    RANGE_MIN_KEY: 'equalizer-range-min',
+    RANGE_MAX_KEY: 'equalizer-range-max',
+    FREQ_MIN_KEY: 'equalizer-freq-min',
+    FREQ_MAX_KEY: 'equalizer-freq-max',
+    PREAMP_KEY: 'equalizer-preamp',
+    DEFAULT_BAND_COUNT: 16,
+    MIN_BANDS: 3,
+    MAX_BANDS: 32,
+    DEFAULT_RANGE_MIN: -30,
+    DEFAULT_RANGE_MAX: 30,
+    ABSOLUTE_MIN: -60,
+    ABSOLUTE_MAX: 60,
+    DEFAULT_FREQ_MIN: 20,
+    DEFAULT_FREQ_MAX: 20000,
+    ABSOLUTE_FREQ_MIN: 10,
+    ABSOLUTE_FREQ_MAX: 96000,
+    DEFAULT_PREAMP: 0,
+    PREAMP_MIN: -20,
+    PREAMP_MAX: 20,
 
     isEnabled() {
         try {
@@ -760,30 +826,232 @@ export const equalizerSettings = {
         localStorage.setItem(this.ENABLED_KEY, enabled ? 'true' : 'false');
     },
 
-    getGains() {
+    getBandCount() {
+        try {
+            const stored = localStorage.getItem(this.BAND_COUNT_KEY);
+            if (stored) {
+                const count = parseInt(stored, 10);
+                if (!isNaN(count) && count >= this.MIN_BANDS && count <= this.MAX_BANDS) {
+                    return count;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_BAND_COUNT;
+    },
+
+    setBandCount(count) {
+        const validCount = Math.max(
+            this.MIN_BANDS,
+            Math.min(this.MAX_BANDS, parseInt(count, 10) || this.DEFAULT_BAND_COUNT)
+        );
+        localStorage.setItem(this.BAND_COUNT_KEY, validCount.toString());
+    },
+
+    getRangeMin() {
+        try {
+            const stored = localStorage.getItem(this.RANGE_MIN_KEY);
+            if (stored) {
+                const val = parseInt(stored, 10);
+                if (!isNaN(val) && val >= this.ABSOLUTE_MIN && val < 0) {
+                    return val;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_RANGE_MIN;
+    },
+
+    setRangeMin(value) {
+        const val = parseInt(value, 10);
+        if (!isNaN(val) && val >= this.ABSOLUTE_MIN && val < 0) {
+            localStorage.setItem(this.RANGE_MIN_KEY, val.toString());
+            return true;
+        }
+        return false;
+    },
+
+    getRangeMax() {
+        try {
+            const stored = localStorage.getItem(this.RANGE_MAX_KEY);
+            if (stored) {
+                const val = parseInt(stored, 10);
+                if (!isNaN(val) && val > 0 && val <= this.ABSOLUTE_MAX) {
+                    return val;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_RANGE_MAX;
+    },
+
+    setRangeMax(value) {
+        const val = parseInt(value, 10);
+        if (!isNaN(val) && val > 0 && val <= this.ABSOLUTE_MAX) {
+            localStorage.setItem(this.RANGE_MAX_KEY, val.toString());
+            return true;
+        }
+        return false;
+    },
+
+    getRange() {
+        return {
+            min: this.getRangeMin(),
+            max: this.getRangeMax(),
+        };
+    },
+
+    setRange(min, max) {
+        const validMin = this.setRangeMin(min);
+        const validMax = this.setRangeMax(max);
+        return validMin && validMax;
+    },
+
+    getFreqMin() {
+        try {
+            const stored = localStorage.getItem(this.FREQ_MIN_KEY);
+            if (stored) {
+                const val = parseInt(stored, 10);
+                if (!isNaN(val) && val >= this.ABSOLUTE_FREQ_MIN && val < this.DEFAULT_FREQ_MAX) {
+                    return val;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_FREQ_MIN;
+    },
+
+    setFreqMin(value) {
+        const val = parseInt(value, 10);
+        if (!isNaN(val) && val >= this.ABSOLUTE_FREQ_MIN && val < this.getFreqMax()) {
+            localStorage.setItem(this.FREQ_MIN_KEY, val.toString());
+            return true;
+        }
+        return false;
+    },
+
+    getFreqMax() {
+        try {
+            const stored = localStorage.getItem(this.FREQ_MAX_KEY);
+            if (stored) {
+                const val = parseInt(stored, 10);
+                if (!isNaN(val) && val > this.getFreqMin() && val <= this.ABSOLUTE_FREQ_MAX) {
+                    return val;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_FREQ_MAX;
+    },
+
+    setFreqMax(value) {
+        const val = parseInt(value, 10);
+        if (!isNaN(val) && val > this.getFreqMin() && val <= this.ABSOLUTE_FREQ_MAX) {
+            localStorage.setItem(this.FREQ_MAX_KEY, val.toString());
+            return true;
+        }
+        return false;
+    },
+
+    getFreqRange() {
+        return {
+            min: this.getFreqMin(),
+            max: this.getFreqMax(),
+        };
+    },
+
+    setFreqRange(min, max) {
+        const validMax = this.setFreqMax(max);
+        const validMin = this.setFreqMin(min);
+        return validMin && validMax;
+    },
+
+    getPreamp() {
+        try {
+            const stored = localStorage.getItem(this.PREAMP_KEY);
+            if (stored) {
+                const val = parseFloat(stored);
+                if (!isNaN(val) && val >= this.PREAMP_MIN && val <= this.PREAMP_MAX) {
+                    return val;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return this.DEFAULT_PREAMP;
+    },
+
+    setPreamp(value) {
+        const val = parseFloat(value);
+        if (!isNaN(val) && val >= this.PREAMP_MIN && val <= this.PREAMP_MAX) {
+            localStorage.setItem(this.PREAMP_KEY, val.toString());
+            return true;
+        }
+        return false;
+    },
+
+    getGains(bandCount) {
+        const count = bandCount || this.getBandCount();
         try {
             const stored = localStorage.getItem(this.GAINS_KEY);
             if (stored) {
                 const gains = JSON.parse(stored);
-                if (Array.isArray(gains) && gains.length === 16) {
-                    return gains;
+                if (Array.isArray(gains)) {
+                    // If stored gains match current band count, return them
+                    if (gains.length === count) {
+                        return gains;
+                    }
+                    // If different band count, try to interpolate or return flat
+                    if (gains.length > 0) {
+                        return this._interpolateGains(gains, count);
+                    }
                 }
             }
         } catch {
             /* ignore */
         }
         // Return flat EQ (all zeros) by default
-        return new Array(16).fill(0);
+        return new Array(count).fill(0);
     },
 
     setGains(gains) {
         try {
-            if (Array.isArray(gains) && gains.length === 16) {
+            if (Array.isArray(gains) && gains.length >= this.MIN_BANDS && gains.length <= this.MAX_BANDS) {
                 localStorage.setItem(this.GAINS_KEY, JSON.stringify(gains));
             }
         } catch (e) {
             console.warn('[EQ] Failed to save gains:', e);
         }
+    },
+
+    /**
+     * Interpolate gains array to match target band count
+     */
+    _interpolateGains(sourceGains, targetCount) {
+        if (sourceGains.length === targetCount) {
+            return [...sourceGains];
+        }
+
+        const result = [];
+        for (let i = 0; i < targetCount; i++) {
+            // Map target index to source index
+            const sourceIndex = (i / (targetCount - 1)) * (sourceGains.length - 1);
+            const indexLow = Math.floor(sourceIndex);
+            const indexHigh = Math.min(Math.ceil(sourceIndex), sourceGains.length - 1);
+            const fraction = sourceIndex - indexLow;
+
+            // Linear interpolation
+            const lowValue = sourceGains[indexLow] || 0;
+            const highValue = sourceGains[indexHigh] || 0;
+            const interpolated = lowValue + (highValue - lowValue) * fraction;
+            result.push(Math.round(interpolated * 10) / 10);
+        }
+        return result;
     },
 
     getPreset() {
@@ -797,12 +1065,108 @@ export const equalizerSettings = {
     setPreset(preset) {
         localStorage.setItem(this.PRESET_KEY, preset);
     },
+
+    // Custom Preset Methods
+    getCustomPresets() {
+        try {
+            const stored = localStorage.getItem(this.CUSTOM_PRESETS_KEY);
+            if (stored) {
+                const presets = JSON.parse(stored);
+                if (typeof presets === 'object' && presets !== null) {
+                    return presets;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        return {};
+    },
+
+    saveCustomPreset(name, gains) {
+        try {
+            if (!name || !Array.isArray(gains) || gains.length < this.MIN_BANDS || gains.length > this.MAX_BANDS) {
+                console.warn('[EQ] Invalid preset data');
+                return false;
+            }
+
+            // Sanitize name - remove special characters and limit length
+            const sanitizedName = name
+                .trim()
+                .substring(0, 50)
+                .replace(/[^\w\s-]/g, '');
+            if (!sanitizedName) {
+                console.warn('[EQ] Invalid preset name');
+                return false;
+            }
+
+            const presets = this.getCustomPresets();
+            const presetId = 'custom_' + Date.now();
+
+            presets[presetId] = {
+                name: sanitizedName,
+                gains: gains.map((g) => Math.round(g * 10) / 10), // Round to 1 decimal place
+                bandCount: gains.length,
+                createdAt: Date.now(),
+            };
+
+            localStorage.setItem(this.CUSTOM_PRESETS_KEY, JSON.stringify(presets));
+            return presetId;
+        } catch (e) {
+            console.warn('[EQ] Failed to save custom preset:', e);
+            return false;
+        }
+    },
+
+    deleteCustomPreset(presetId) {
+        try {
+            const presets = this.getCustomPresets();
+            if (presets[presetId]) {
+                delete presets[presetId];
+                localStorage.setItem(this.CUSTOM_PRESETS_KEY, JSON.stringify(presets));
+                return true;
+            }
+            return false;
+        } catch (e) {
+            console.warn('[EQ] Failed to delete custom preset:', e);
+            return false;
+        }
+    },
+
+    updateCustomPreset(presetId, name, gains) {
+        try {
+            const presets = this.getCustomPresets();
+            if (!presets[presetId]) {
+                return false;
+            }
+
+            if (name !== undefined) {
+                const sanitizedName = name
+                    .trim()
+                    .substring(0, 50)
+                    .replace(/[^\w\s-]/g, '');
+                if (sanitizedName) {
+                    presets[presetId].name = sanitizedName;
+                }
+            }
+
+            if (Array.isArray(gains) && gains.length === 16) {
+                presets[presetId].gains = gains.map((g) => Math.round(g * 10) / 10);
+                presets[presetId].updatedAt = Date.now();
+            }
+
+            localStorage.setItem(this.CUSTOM_PRESETS_KEY, JSON.stringify(presets));
+            return true;
+        } catch (e) {
+            console.warn('[EQ] Failed to update custom preset:', e);
+            return false;
+        }
+    },
 };
 
-export const sidebarSettings = {
-    STORAGE_KEY: 'monochrome-sidebar-collapsed',
+export const monoAudioSettings = {
+    STORAGE_KEY: 'mono-audio-enabled',
 
-    isCollapsed() {
+    isEnabled() {
         try {
             return localStorage.getItem(this.STORAGE_KEY) === 'true';
         } catch {
@@ -810,20 +1174,78 @@ export const sidebarSettings = {
         }
     },
 
-    setCollapsed(collapsed) {
-        localStorage.setItem(this.STORAGE_KEY, collapsed ? 'true' : 'false');
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const exponentialVolumeSettings = {
+    STORAGE_KEY: 'exponential-volume-enabled',
+
+    isEnabled() {
+        try {
+            return localStorage.getItem(this.STORAGE_KEY) === 'true';
+        } catch {
+            return false;
+        }
     },
 
-    restoreState() {
-        const isCollapsed = this.isCollapsed();
-        if (isCollapsed) {
-            document.body.classList.add('sidebar-collapsed');
-            const toggleBtn = document.getElementById('sidebar-toggle');
-            if (toggleBtn) {
-                toggleBtn.innerHTML =
-                    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
-            }
+    setEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+
+    // Apply exponential curve to linear volume (0-1)
+    // Uses a power curve: output = input^3 for more natural volume control
+    applyCurve(linearVolume) {
+        if (!this.isEnabled()) {
+            return linearVolume;
         }
+        // Exponential curve: cubed for much finer low-volume control
+        // This creates a more dramatic difference that you'll actually notice
+        return Math.pow(linearVolume, 3);
+    },
+
+    // Convert from perceived volume back to linear for UI
+    inverseCurve(perceivedVolume) {
+        if (!this.isEnabled()) {
+            return perceivedVolume;
+        }
+        return Math.cbrt(perceivedVolume);
+    },
+};
+
+export const audioEffectsSettings = {
+    SPEED_KEY: 'audio-effects-speed',
+
+    // Playback speed (0.01 to 100, default 1.0)
+    getSpeed() {
+        try {
+            const val = parseFloat(localStorage.getItem(this.SPEED_KEY));
+            return isNaN(val) ? 1.0 : Math.max(0.01, Math.min(100, val));
+        } catch {
+            return 1.0;
+        }
+    },
+
+    setSpeed(speed) {
+        const validSpeed = Math.max(0.01, Math.min(100, parseFloat(speed) || 1.0));
+        localStorage.setItem(this.SPEED_KEY, validSpeed.toString());
+    },
+};
+
+export const settingsUiState = {
+    ACTIVE_TAB_KEY: 'settings-active-tab',
+
+    getActiveTab() {
+        try {
+            return localStorage.getItem(this.ACTIVE_TAB_KEY) || 'appearance';
+        } catch {
+            return 'appearance';
+        }
+    },
+
+    setActiveTab(tab) {
+        localStorage.setItem(this.ACTIVE_TAB_KEY, tab);
     },
 };
 
@@ -853,6 +1275,34 @@ export const queueManager = {
             localStorage.setItem(this.STORAGE_KEY, JSON.stringify(minimalState));
         } catch (e) {
             console.warn('Failed to save queue to localStorage:', e);
+        }
+    },
+};
+
+export const sidebarSettings = {
+    STORAGE_KEY: 'monochrome-sidebar-collapsed',
+
+    isCollapsed() {
+        try {
+            return localStorage.getItem(this.STORAGE_KEY) === 'true';
+        } catch {
+            return false;
+        }
+    },
+
+    setCollapsed(collapsed) {
+        localStorage.setItem(this.STORAGE_KEY, collapsed ? 'true' : 'false');
+    },
+
+    restoreState() {
+        const isCollapsed = this.isCollapsed();
+        if (isCollapsed) {
+            document.body.classList.add('sidebar-collapsed');
+            const toggleBtn = document.getElementById('sidebar-toggle');
+            if (toggleBtn) {
+                toggleBtn.innerHTML =
+                    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
+            }
         }
     },
 };
@@ -1042,6 +1492,38 @@ export const homePageSettings = {
     setShowEditorsPicks(enabled) {
         localStorage.setItem(this.SHOW_EDITORS_PICKS_KEY, enabled ? 'true' : 'false');
     },
+
+    SHUFFLE_EDITORS_PICKS_KEY: 'home-shuffle-editors-picks',
+
+    shouldShuffleEditorsPicks() {
+        try {
+            const val = localStorage.getItem(this.SHUFFLE_EDITORS_PICKS_KEY);
+            return val === null ? true : val === 'true';
+        } catch {
+            return true;
+        }
+    },
+
+    setShuffleEditorsPicks(enabled) {
+        localStorage.setItem(this.SHUFFLE_EDITORS_PICKS_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const analyticsSettings = {
+    ENABLED_KEY: 'analytics-enabled',
+
+    isEnabled() {
+        try {
+            const val = localStorage.getItem(this.ENABLED_KEY);
+            return val === null ? true : val === 'true';
+        } catch {
+            return true;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.ENABLED_KEY, enabled ? 'true' : 'false');
+    },
 };
 
 export const sidebarSectionSettings = {
@@ -1055,6 +1537,25 @@ export const sidebarSectionSettings = {
     SHOW_ABOUT_KEY: 'sidebar-show-about',
     SHOW_DOWNLOAD_KEY: 'sidebar-show-download',
     SHOW_DISCORD_KEY: 'sidebar-show-discord',
+    ORDER_KEY: 'sidebar-menu-order',
+    DEFAULT_ORDER: [
+        'sidebar-nav-home',
+        'sidebar-nav-library',
+        'sidebar-nav-recent',
+        'sidebar-nav-unreleased',
+        'sidebar-nav-donate',
+        'sidebar-nav-settings',
+        'sidebar-nav-account',
+        'sidebar-nav-about-bottom',
+        'sidebar-nav-download-bottom',
+        'sidebar-nav-discordbtn',
+    ],
+
+    getBottomNavIds() {
+        const ul = document.querySelector('.sidebar-nav.bottom ul');
+        if (!ul) return [];
+        return Array.from(ul.children).map((li) => li.id);
+    },
 
     shouldShowHome() {
         try {
@@ -1122,16 +1623,15 @@ export const sidebarSectionSettings = {
     },
 
     shouldShowSettings() {
-        try {
-            const val = localStorage.getItem(this.SHOW_SETTINGS_KEY);
-            return val === null ? true : val === 'true';
-        } catch {
-            return true;
-        }
+        return true;
     },
 
     setShowSettings(enabled) {
-        localStorage.setItem(this.SHOW_SETTINGS_KEY, enabled ? 'true' : 'false');
+        if (enabled) {
+            localStorage.setItem(this.SHOW_SETTINGS_KEY, 'true');
+        } else {
+            localStorage.removeItem(this.SHOW_SETTINGS_KEY);
+        }
     },
 
     shouldShowAccount() {
@@ -1186,7 +1686,56 @@ export const sidebarSectionSettings = {
         localStorage.setItem(this.SHOW_DISCORD_KEY, enabled ? 'true' : 'false');
     },
 
+    normalizeOrder(order) {
+        const baseOrder = this.DEFAULT_ORDER;
+        const safeOrder = Array.isArray(order) ? order.filter((id) => baseOrder.includes(id)) : [];
+        const uniqueOrder = [...new Set(safeOrder)];
+        const missing = baseOrder.filter((id) => !uniqueOrder.includes(id));
+        return [...uniqueOrder, ...missing];
+    },
+
+    getOrder() {
+        try {
+            const stored = localStorage.getItem(this.ORDER_KEY);
+            if (stored) {
+                return this.normalizeOrder(JSON.parse(stored));
+            }
+        } catch {
+            // ignore
+        }
+        return this.normalizeOrder([]);
+    },
+
+    setOrder(order) {
+        const normalized = this.normalizeOrder(order);
+        localStorage.setItem(this.ORDER_KEY, JSON.stringify(normalized));
+    },
+
+    applySidebarOrder() {
+        const mainList = document.querySelector('.sidebar-nav.main ul');
+        const bottomList = document.querySelector('.sidebar-nav.bottom ul');
+        if (!mainList) return;
+
+        const order = this.getOrder();
+        const bottomIds = this.getBottomNavIds();
+        const mainOrder = order.filter((id) => !bottomIds.includes(id));
+        const bottomOrder = order.filter((id) => bottomIds.includes(id));
+
+        mainOrder.forEach((id) => {
+            const item = document.getElementById(id);
+            if (item) mainList.appendChild(item);
+        });
+
+        if (bottomList) {
+            bottomOrder.forEach((id) => {
+                const item = document.getElementById(id);
+                if (item) bottomList.appendChild(item);
+            });
+        }
+    },
+
     applySidebarVisibility() {
+        this.applySidebarOrder();
         const items = [
             { id: 'sidebar-nav-home', check: this.shouldShowHome() },
             { id: 'sidebar-nav-library', check: this.shouldShowLibrary() },
@@ -1195,9 +1744,9 @@ export const sidebarSectionSettings = {
             { id: 'sidebar-nav-donate', check: this.shouldShowDonate() },
             { id: 'sidebar-nav-settings', check: this.shouldShowSettings() },
             { id: 'sidebar-nav-account', check: this.shouldShowAccount() },
-            { id: 'sidebar-nav-about', check: this.shouldShowAbout() },
-            { id: 'sidebar-nav-download', check: this.shouldShowDownload() },
-            { id: 'sidebar-nav-discord', check: this.shouldShowDiscord() },
+            { id: 'sidebar-nav-about-bottom', check: this.shouldShowAbout() },
+            { id: 'sidebar-nav-download-bottom', check: this.shouldShowDownload() },
+            { id: 'sidebar-nav-discordbtn', check: this.shouldShowDiscord() },
         ];
 
         items.forEach(({ id, check }) => {
@@ -1221,16 +1770,54 @@ if (typeof window !== 'undefined' && window.matchMedia) {
 export const fontSettings = {
     STORAGE_KEY: 'monochrome-font-config-v2',
     CUSTOM_FONTS_KEY: 'monochrome-custom-fonts',
+    FONT_SIZE_KEY: 'monochrome-font-size',
     FONT_LINK_ID: 'monochrome-dynamic-font',
     FONT_FACE_ID: 'monochrome-dynamic-fontface',
 
     getDefaultConfig() {
         return {
-            type: 'google',
-            family: 'IBM Plex Mono',
-            fallback: 'monospace',
-            weights: [100, 200, 300, 400, 500, 600, 700],
+            type: 'preset',
+            family: 'Inter',
+            fallback: 'sans-serif',
+            weights: [400, 500, 600, 700, 800],
         };
+    },
+
+    getDefaultFontSize() {
+        return 100; // 100% = default size
+    },
+
+    getFontSize() {
+        try {
+            const stored = localStorage.getItem(this.FONT_SIZE_KEY);
+            if (stored) {
+                const size = parseInt(stored, 10);
+                if (!isNaN(size) && size >= 50 && size <= 200) {
+                    return size;
+                }
+            }
+        } catch {
+            // ignore
+        }
+        return this.getDefaultFontSize();
+    },
+
+    setFontSize(size) {
+        const validSize = Math.max(50, Math.min(200, parseInt(size, 10) || 100));
+        localStorage.setItem(this.FONT_SIZE_KEY, validSize.toString());
+        this.applyFontSize();
+        return validSize;
+    },
+
+    applyFontSize() {
+        const size = this.getFontSize();
+        document.documentElement.style.setProperty('--font-size-scale', `${size}%`);
+    },
+
+    resetFontSize() {
+        localStorage.removeItem(this.FONT_SIZE_KEY);
+        this.applyFontSize();
+        return this.getDefaultFontSize();
     },
 
     getConfig() {
@@ -1439,6 +2026,41 @@ export const fontSettings = {
         document.documentElement.style.setProperty('--font-family', fontValue);
     },
 
+    loadAppleMusicFont() {
+        const APPLE_FONT_LINK_ID = 'monochrome-apple-font';
+
+        // Remove any existing dynamic font links
+        let existingLink = document.getElementById(this.FONT_LINK_ID);
+        if (existingLink) {
+            existingLink.remove();
+        }
+
+        // Remove any existing @font-face styles
+        let existingStyle = document.getElementById(this.FONT_FACE_ID);
+        if (existingStyle) {
+            existingStyle.remove();
+        }
+
+        // Load Apple font CSS
+        let link = document.getElementById(APPLE_FONT_LINK_ID);
+        if (!link) {
+            link = document.createElement('link');
+            link.id = APPLE_FONT_LINK_ID;
+            link.rel = 'stylesheet';
+            link.href = '/fonts/apple/sf-pro-display.css';
+            document.head.appendChild(link);
+        }
+
+        this.setConfig({
+            type: 'preset',
+            family: 'Apple Music',
+            fallback: 'sans-serif',
+            weights: [400, 500, 600, 700],
+        });
+
+        document.documentElement.style.setProperty('--font-family', "'SF Pro Display', sans-serif");
+    },
+
     applyFont() {
         const config = this.getConfig();
 
@@ -1454,7 +2076,11 @@ export const fontSettings = {
                 break;
             case 'preset':
             default:
-                this.loadPresetFont(config.family, config.fallback);
+                if (config.family === 'Apple Music') {
+                    this.loadAppleMusicFont();
+                } else {
+                    this.loadPresetFont(config.family, config.fallback);
+                }
                 break;
         }
     },
@@ -1467,5 +2093,229 @@ export const fontSettings = {
             size: font.size,
             uploadedAt: font.uploadedAt,
         }));
+    },
+};
+
+export const pwaUpdateSettings = {
+    STORAGE_KEY: 'pwa-auto-update-enabled',
+
+    isAutoUpdateEnabled() {
+        try {
+            // Default to true (auto-update) if not set
+            return localStorage.getItem(this.STORAGE_KEY) !== 'false';
+        } catch {
+            return true;
+        }
+    },
+
+    setAutoUpdateEnabled(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const musicProviderSettings = {
+    STORAGE_KEY: 'music-provider',
+
+    getProvider() {
+        try {
+            return localStorage.getItem(this.STORAGE_KEY) || 'tidal';
+        } catch {
+            return 'tidal';
+        }
+    },
+
+    setProvider(provider) {
+        localStorage.setItem(this.STORAGE_KEY, provider);
+    },
+};
+
+export const queueBehaviorSettings = {
+    STORAGE_KEY: 'queue-close-on-navigation',
+
+    shouldCloseOnNavigation() {
+        try {
+            // Default to true on mobile, false on desktop
+            const saved = localStorage.getItem(this.STORAGE_KEY);
+            if (saved === null) {
+                // Auto-detect: default to true for mobile/touch devices
+                return window.matchMedia('(pointer: coarse)').matches;
+            }
+            return saved === 'true';
+        } catch {
+            return false;
+        }
+    },
+
+    setCloseOnNavigation(enabled) {
+        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const contentBlockingSettings = {
+    BLOCKED_ARTISTS_KEY: 'blocked-artists',
+    BLOCKED_TRACKS_KEY: 'blocked-tracks',
+    BLOCKED_ALBUMS_KEY: 'blocked-albums',
+
+    // Blocked Artists
+    getBlockedArtists() {
+        try {
+            const data = localStorage.getItem(this.BLOCKED_ARTISTS_KEY);
+            return data ? JSON.parse(data) : [];
+        } catch {
+            return [];
+        }
+    },
+
+    setBlockedArtists(artists) {
+        localStorage.setItem(this.BLOCKED_ARTISTS_KEY, JSON.stringify(artists));
+    },
+
+    isArtistBlocked(artistId) {
+        if (!artistId) return false;
+        return this.getBlockedArtists().some((a) => a.id === artistId);
+    },
+
+    blockArtist(artist) {
+        if (!artist || !artist.id) return;
+        const blocked = this.getBlockedArtists();
+        if (!blocked.some((a) => a.id === artist.id)) {
+            blocked.push({
+                id: artist.id,
+                name: artist.name || 'Unknown Artist',
+                blockedAt: Date.now(),
+            });
+            this.setBlockedArtists(blocked);
+        }
+    },
+
+    unblockArtist(artistId) {
+        const blocked = this.getBlockedArtists().filter((a) => a.id !== artistId);
+        this.setBlockedArtists(blocked);
+    },
+
+    // Blocked Tracks
+    getBlockedTracks() {
+        try {
+            const data = localStorage.getItem(this.BLOCKED_TRACKS_KEY);
+            return data ? JSON.parse(data) : [];
+        } catch {
+            return [];
+        }
+    },
+
+    setBlockedTracks(tracks) {
+        localStorage.setItem(this.BLOCKED_TRACKS_KEY, JSON.stringify(tracks));
+    },
+
+    isTrackBlocked(trackId) {
+        if (!trackId) return false;
+        return this.getBlockedTracks().some((t) => t.id === trackId);
+    },
+
+    blockTrack(track) {
+        if (!track || !track.id) return;
+        const blocked = this.getBlockedTracks();
+        if (!blocked.some((t) => t.id === track.id)) {
+            blocked.push({
+                id: track.id,
+                title: track.title || 'Unknown Track',
+                artist: track.artist?.name || track.artist || 'Unknown Artist',
+                blockedAt: Date.now(),
+            });
+            this.setBlockedTracks(blocked);
+        }
+    },
+
+    unblockTrack(trackId) {
+        const blocked = this.getBlockedTracks().filter((t) => t.id !== trackId);
+        this.setBlockedTracks(blocked);
+    },
+
+    // Blocked Albums
+    getBlockedAlbums() {
+        try {
+            const data = localStorage.getItem(this.BLOCKED_ALBUMS_KEY);
+            return data ? JSON.parse(data) : [];
+        } catch {
+            return [];
+        }
+    },
+
+    setBlockedAlbums(albums) {
+        localStorage.setItem(this.BLOCKED_ALBUMS_KEY, JSON.stringify(albums));
+    },
+
+    isAlbumBlocked(albumId) {
+        if (!albumId) return false;
+        return this.getBlockedAlbums().some((a) => a.id === albumId);
+    },
+
+    blockAlbum(album) {
+        if (!album || !album.id) return;
+        const blocked = this.getBlockedAlbums();
+        if (!blocked.some((a) => a.id === album.id)) {
+            blocked.push({
+                id: album.id,
+                title: album.title || 'Unknown Album',
+                artist: album.artist?.name || album.artist || 'Unknown Artist',
+                blockedAt: Date.now(),
+            });
+            this.setBlockedAlbums(blocked);
+        }
+    },
+
+    unblockAlbum(albumId) {
+        const blocked = this.getBlockedAlbums().filter((a) => a.id !== albumId);
+        this.setBlockedAlbums(blocked);
+    },
+
+    // Check if track should be hidden (blocked track or by blocked artist)
+    shouldHideTrack(track) {
+        if (!track) return true;
+        if (this.isTrackBlocked(track.id)) return true;
+        if (track.artist?.id && this.isArtistBlocked(track.artist.id)) return true;
+        if (track.artists?.some((a) => this.isArtistBlocked(a.id))) return true;
+        if (track.album?.id && this.isAlbumBlocked(track.album.id)) return true;
+        return false;
+    },
+
+    // Check if album should be hidden
+    shouldHideAlbum(album) {
+        if (!album) return true;
+        if (this.isAlbumBlocked(album.id)) return true;
+        if (album.artist?.id && this.isArtistBlocked(album.artist.id)) return true;
+        if (album.artists?.some((a) => this.isArtistBlocked(a.id))) return true;
+        return false;
+    },
+
+    // Check if artist should be hidden
+    shouldHideArtist(artist) {
+        if (!artist) return true;
+        return this.isArtistBlocked(artist.id);
+    },
+
+    // Filter arrays
+    filterTracks(tracks) {
+        return tracks.filter((t) => !this.shouldHideTrack(t));
+    },
+
+    filterAlbums(albums) {
+        return albums.filter((a) => !this.shouldHideAlbum(a));
+    },
+
+    filterArtists(artists) {
+        return artists.filter((a) => !this.shouldHideArtist(a));
+    },
+
+    // Get all blocked items count
+    getTotalBlockedCount() {
+        return this.getBlockedArtists().length + this.getBlockedTracks().length + this.getBlockedAlbums().length;
+    },
+
+    // Clear all blocked items
+    clearAllBlocked() {
+        localStorage.removeItem(this.BLOCKED_ARTISTS_KEY);
+        localStorage.removeItem(this.BLOCKED_TRACKS_KEY);
+        localStorage.removeItem(this.BLOCKED_ALBUMS_KEY);
     },
 };

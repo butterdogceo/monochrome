@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://monochrome.tf">
-    <img src="https://github.com/SamidyFR/monochrome/blob/main/public/assets/512.png?raw=true" alt="Monochrome Logo" width="150px">
+    <img src="https://github.com/monochrome-music/monochrome/blob/main/public/assets/512.png?raw=true" alt="Monochrome Logo" width="150px">
   </a>
 </p>
 
@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://monochrome.tf">Website</a> •
-  <a href="https://pally.gg/p/monochrome">Donate</a> •
+  <a href="https://ko-fi.com/monochromemusic">Donate</a> •
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
   <a href="#usage">Usage</a> •
@@ -21,14 +21,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/SamidyFR/monochrome/stargazers">
-    <img src="https://img.shields.io/github/stars/SamidyFR/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub stars">
+  <a href="https://github.com/monochrome-music/monochrome/stargazers">
+    <img src="https://img.shields.io/github/stars/monochrome-music/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub stars">
   </a>
-  <a href="https://github.com/SamidyFR/monochrome/forks">
-    <img src="https://img.shields.io/github/forks/SamidyFR/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub forks">
+  <a href="https://github.com/monochrome-music/monochrome/forks">
+    <img src="https://img.shields.io/github/forks/monochrome-music/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub forks">
   </a>
-  <a href="https://github.com/SamidyFR/monochrome/issues">
-    <img src="https://img.shields.io/github/issues/SamidyFR/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub issues">
+  <a href="https://github.com/monochrome-music/monochrome/issues">
+    <img src="https://img.shields.io/github/issues/monochrome-music/monochrome?style=for-the-badge&color=ffffff&labelColor=000000" alt="GitHub issues">
   </a>
 </p>
 
@@ -39,8 +39,8 @@
 **Monochrome** is an open-source, privacy-respecting, ad-free [TIDAL](https://tidal.com) web UI, built on top of [Hi-Fi](https://github.com/binimum/hifi-api). It provides a beautiful, minimalist interface for streaming high-quality music without the clutter of traditional streaming platforms.
 
 <p align="center">
-  <a href="https://monochrome.tf/#album/413189044">
-    <img src="https://files.catbox.moe/tpgxii.png" alt="Monochrome UI" width="800">
+  <a href="https://monochrome.tf/#album/90502209">
+    <img width="2559" height="1439" alt="image" src="https://github.com/user-attachments/assets/7973ea9f-c4aa-4c12-b476-f388f614db38"  alt="Monochrome UI" width="800">
   </a>
 </p>
 
@@ -131,7 +131,7 @@ For PocketBase, development mode, and advanced setups, see [DOCKER.md](DOCKER.md
 1. **Clone the repository:**
 
     ```bash
-    git clone https://github.com/SamidyFR/monochrome.git
+    git clone https://github.com/monochrome-music/monochrome.git
     cd monochrome
     ```
 
