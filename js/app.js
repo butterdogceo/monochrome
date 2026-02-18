@@ -7,7 +7,7 @@ import {
     downloadQualitySettings,
     sidebarSettings,
     pwaUpdateSettings,
-    queueBehaviorSettings,
+    modalSettings,
 } from './storage.js';
 import { UIRenderer } from './ui.js';
 import { Player } from './player.js';
@@ -2117,9 +2117,18 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
 
-        // Close side panel (queue/lyrics) on navigation if setting is enabled
-        if (queueBehaviorSettings.shouldCloseOnNavigation()) {
+        // Intercept back navigation to close modals first if setting is enabled
+        if (event && modalSettings.shouldInterceptBackToClose() && modalSettings.hasOpenModalsOrPanels()) {
             sidePanelManager.close();
+            modalSettings.closeAllModals();
+            history.pushState(history.state || { app: true }, '', window.location.pathname);
+            return;
+        }
+
+        // Close side panel (queue/lyrics) and modals on navigation if setting is enabled
+        if (modalSettings.shouldCloseOnNavigation()) {
+            sidePanelManager.close();
+            modalSettings.closeAllModals();
         }
 
         await router();
@@ -2292,6 +2301,12 @@ function showUpdateNotification(updateCallback) {
     });
 }
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function showMissingTracksNotification(missingTracks) {
     const modal = document.getElementById('missing-tracks-modal');
     const listUl = document.getElementById('missing-tracks-list-ul');
@@ -2300,7 +2315,7 @@ function showMissingTracksNotification(missingTracks) {
         .map((track) => {
             const text =
                 typeof track === 'string' ? track : `${track.artist ? track.artist + ' - ' : ''}${track.title}`;
-            return `<li>${text}</li>`;
+            return `<li>${escapeHtml(text)}</li>`;
         })
         .join('');
 

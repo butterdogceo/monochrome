@@ -32,7 +32,7 @@ import {
     contentBlockingSettings,
     musicProviderSettings,
     analyticsSettings,
-    queueBehaviorSettings,
+    modalSettings,
 } from './storage.js';
 import { audioContextManager, EQ_PRESETS } from './audio-context.js';
 import { getButterchurnPresets } from './visualizers/butterchurn.js';
@@ -1910,12 +1910,21 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    // Queue Close on Navigation Toggle
-    const queueCloseOnNavigationToggle = document.getElementById('queue-close-on-navigation-toggle');
-    if (queueCloseOnNavigationToggle) {
-        queueCloseOnNavigationToggle.checked = queueBehaviorSettings.shouldCloseOnNavigation();
-        queueCloseOnNavigationToggle.addEventListener('change', (e) => {
-            queueBehaviorSettings.setCloseOnNavigation(e.target.checked);
+    // Close Modals on Navigation Toggle
+    const closeModalsOnNavigationToggle = document.getElementById('close-modals-on-navigation-toggle');
+    if (closeModalsOnNavigationToggle) {
+        closeModalsOnNavigationToggle.checked = modalSettings.shouldCloseOnNavigation();
+        closeModalsOnNavigationToggle.addEventListener('change', (e) => {
+            modalSettings.setCloseOnNavigation(e.target.checked);
+        });
+    }
+
+    // Intercept Back to Close Modals Toggle
+    const interceptBackToCloseToggle = document.getElementById('intercept-back-to-close-modals-toggle');
+    if (interceptBackToCloseToggle) {
+        interceptBackToCloseToggle.checked = modalSettings.shouldInterceptBackToClose();
+        interceptBackToCloseToggle.addEventListener('change', (e) => {
+            modalSettings.setInterceptBackToClose(e.target.checked);
         });
     }
 
@@ -2899,11 +2908,16 @@ function initializeFontSettings() {
         let fontName = input;
 
         // Check if it's a Google Fonts URL
-        if (input.includes('fonts.google.com')) {
-            const parsed = fontSettings.parseGoogleFontsUrl(input);
-            if (parsed) {
-                fontName = parsed;
+        try {
+            const urlObj = new URL(input);
+            if (urlObj.hostname === 'fonts.google.com') {
+                const parsed = fontSettings.parseGoogleFontsUrl(input);
+                if (parsed) {
+                    fontName = parsed;
+                }
             }
+        } catch {
+            // Not a URL, treat as font name
         }
 
         fontSettings.loadGoogleFont(fontName);
