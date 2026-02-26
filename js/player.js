@@ -36,6 +36,11 @@ export class Player {
         this.currentRgValues = null;
         this.userVolume = parseFloat(localStorage.getItem('volume') || '0.7');
         this.isFallbackRetry = false;
+        this.autoplayBlocked = false;
+        this.isIOS = typeof window !== 'undefined' && window.__IS_IOS__ === true;
+        this.isPwa =
+            typeof window !== 'undefined' &&
+            (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true);
 
         // Sleep timer properties
         this.sleepTimer = null;
@@ -68,6 +73,10 @@ export class Player {
                     audioContextManager.init(this.audio);
                 }
                 audioContextManager.resume();
+            }
+            if (document.visibilityState === 'visible' && this.autoplayBlocked) {
+                this.autoplayBlocked = false;
+                this.audio.play().catch(() => {});
             }
         });
     }
@@ -164,7 +173,34 @@ export class Player {
                 const albumEl = document.querySelector('.now-playing-bar .album');
                 const artistEl = document.querySelector('.now-playing-bar .artist');
 
-                if (coverEl) coverEl.src = this.api.getCoverUrl(track.album?.cover);
+                if (coverEl) {
+                    const videoCoverUrl = track.album?.videoCover
+                        ? this.api.tidalAPI.getVideoCoverUrl(track.album.videoCover)
+                        : null;
+                    const coverUrl = videoCoverUrl || this.api.getCoverUrl(track.album?.cover);
+
+                    if (videoCoverUrl) {
+                        if (coverEl.tagName === 'IMG') {
+                            const video = document.createElement('video');
+                            video.src = videoCoverUrl;
+                            video.autoplay = true;
+                            video.loop = true;
+                            video.muted = true;
+                            video.playsInline = true;
+                            video.className = coverEl.className;
+                            coverEl.replaceWith(video);
+                        }
+                    } else {
+                        if (coverEl.tagName === 'VIDEO') {
+                            const img = document.createElement('img');
+                            img.src = coverUrl;
+                            img.className = coverEl.className;
+                            coverEl.replaceWith(img);
+                        } else {
+                            coverEl.src = coverUrl;
+                        }
+                    }
+                }
                 if (titleEl) {
                     const qualityBadge = createQualityBadgeHTML(track);
                     titleEl.innerHTML = `${escapeHtml(trackTitle)} ${qualityBadge}`;
@@ -356,7 +392,35 @@ export class Player {
         const trackArtistsHTML = getTrackArtistsHTML(track);
         const yearDisplay = getTrackYearDisplay(track);
 
-        document.querySelector('.now-playing-bar .cover').src = this.api.getCoverUrl(track.album?.cover);
+        const coverEl = document.querySelector('.now-playing-bar .cover');
+        if (coverEl) {
+            const videoCoverUrl = track.album?.videoCover
+                ? this.api.tidalAPI.getVideoCoverUrl(track.album.videoCover)
+                : null;
+            const coverUrl = videoCoverUrl || this.api.getCoverUrl(track.album?.cover);
+
+            if (videoCoverUrl) {
+                if (coverEl.tagName === 'IMG') {
+                    const video = document.createElement('video');
+                    video.src = videoCoverUrl;
+                    video.autoplay = true;
+                    video.loop = true;
+                    video.muted = true;
+                    video.playsInline = true;
+                    video.className = coverEl.className;
+                    coverEl.replaceWith(video);
+                }
+            } else {
+                if (coverEl.tagName === 'VIDEO') {
+                    const img = document.createElement('img');
+                    img.src = coverUrl;
+                    img.className = coverEl.className;
+                    coverEl.replaceWith(img);
+                } else {
+                    coverEl.src = coverUrl;
+                }
+            }
+        }
         document.querySelector('.now-playing-bar .title').innerHTML =
             `${escapeHtml(trackTitle)} ${createQualityBadgeHTML(track)}`;
         const albumEl = document.querySelector('.now-playing-bar .album');
@@ -434,32 +498,14 @@ export class Player {
                 this.audio.src = streamUrl;
 
                 // Wait for audio to be ready before playing (prevents restart issues with blob URLs)
-                await new Promise((resolve, reject) => {
-                    const onCanPlay = () => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        resolve();
-                    };
-                    const onError = (e) => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        reject(e);
-                    };
-                    this.audio.addEventListener('canplay', onCanPlay);
-                    this.audio.addEventListener('error', onError);
-
-                    // Timeout after 10 seconds
-                    setTimeout(() => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        reject(new Error('Timeout waiting for audio to load'));
-                    }, 10000);
-                });
+                const canPlay = await this.waitForCanPlayOrTimeout();
+                if (!canPlay) return;
 
                 if (startTime > 0) {
                     this.audio.currentTime = startTime;
                 }
-                await this.audio.play();
+                const played = await this.safePlay();
+                if (!played) return;
             } else if (track.isLocal && track.file) {
                 if (this.dashInitialized) {
                     this.dashPlayer.reset(); // Ensure dash is off
@@ -473,32 +519,14 @@ export class Player {
                 this.audio.src = streamUrl;
 
                 // Wait for audio to be ready before playing
-                await new Promise((resolve, reject) => {
-                    const onCanPlay = () => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        resolve();
-                    };
-                    const onError = (e) => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        reject(e);
-                    };
-                    this.audio.addEventListener('canplay', onCanPlay);
-                    this.audio.addEventListener('error', onError);
-
-                    // Timeout after 10 seconds
-                    setTimeout(() => {
-                        this.audio.removeEventListener('canplay', onCanPlay);
-                        this.audio.removeEventListener('error', onError);
-                        reject(new Error('Timeout waiting for audio to load'));
-                    }, 10000);
-                });
+                const canPlay = await this.waitForCanPlayOrTimeout();
+                if (!canPlay) return;
 
                 if (startTime > 0) {
                     this.audio.currentTime = startTime;
                 }
-                await this.audio.play();
+                const played = await this.safePlay();
+                if (!played) return;
             } else {
                 const isQobuz = String(track.id).startsWith('q:');
 
@@ -560,37 +588,23 @@ export class Player {
                     this.audio.src = streamUrl;
 
                     // Wait for audio to be ready before playing
-                    await new Promise((resolve, reject) => {
-                        const onCanPlay = () => {
-                            this.audio.removeEventListener('canplay', onCanPlay);
-                            this.audio.removeEventListener('error', onError);
-                            resolve();
-                        };
-                        const onError = (e) => {
-                            this.audio.removeEventListener('canplay', onCanPlay);
-                            this.audio.removeEventListener('error', onError);
-                            reject(e);
-                        };
-                        this.audio.addEventListener('canplay', onCanPlay);
-                        this.audio.addEventListener('error', onError);
-
-                        // Timeout after 10 seconds
-                        setTimeout(() => {
-                            this.audio.removeEventListener('canplay', onCanPlay);
-                            this.audio.removeEventListener('error', onError);
-                            reject(new Error('Timeout waiting for audio to load'));
-                        }, 10000);
-                    });
+                    const canPlay = await this.waitForCanPlayOrTimeout();
+                    if (!canPlay) return;
 
                     if (startTime > 0) {
                         this.audio.currentTime = startTime;
                     }
-                    await this.audio.play();
+                    const played = await this.safePlay();
+                    if (!played) return;
                 }
             }
 
             this.preloadNextTracks();
         } catch (error) {
+            if (error && (error.name === 'NotAllowedError' || error.name === 'AbortError')) {
+                this.autoplayBlocked = true;
+                return;
+            }
             console.error(`Could not play track: ${trackTitle}`, error);
             // Skip to next track on unexpected error
             if (recursiveCount < currentQueue.length) {
@@ -684,7 +698,7 @@ export class Player {
         }
 
         if (this.audio.paused) {
-            this.audio.play().catch((e) => {
+            this.safePlay().catch((e) => {
                 if (e.name === 'NotAllowedError' || e.name === 'AbortError') return;
                 console.error('Play failed, reloading track:', e);
                 if (this.currentTrack) {
@@ -722,7 +736,10 @@ export class Player {
                 tracksToShuffle.splice(this.currentQueueIndex, 1);
             }
 
-            tracksToShuffle.sort(() => Math.random() - 0.5);
+            for (let i = tracksToShuffle.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [tracksToShuffle[i], tracksToShuffle[j]] = [tracksToShuffle[j], tracksToShuffle[i]];
+            }
 
             if (currentTrack) {
                 this.shuffledQueue = [currentTrack, ...tracksToShuffle];
@@ -962,6 +979,53 @@ export class Player {
         } catch (error) {
             console.log('Failed to update Media Session position:', error);
         }
+    }
+
+    async safePlay() {
+        try {
+            await this.audio.play();
+            this.autoplayBlocked = false;
+            return true;
+        } catch (error) {
+            if (error && (error.name === 'NotAllowedError' || error.name === 'AbortError')) {
+                this.autoplayBlocked = true;
+                return false;
+            }
+            throw error;
+        }
+    }
+
+    async waitForCanPlayOrTimeout(timeoutMs = 10000) {
+        if (this.audio.readyState >= 2) {
+            return true;
+        }
+
+        return await new Promise((resolve, reject) => {
+            const onCanPlay = () => {
+                this.audio.removeEventListener('canplay', onCanPlay);
+                this.audio.removeEventListener('error', onError);
+                resolve(true);
+            };
+            const onError = (e) => {
+                this.audio.removeEventListener('canplay', onCanPlay);
+                this.audio.removeEventListener('error', onError);
+                reject(e);
+            };
+            this.audio.addEventListener('canplay', onCanPlay);
+            this.audio.addEventListener('error', onError);
+
+            // Timeout after 10 seconds. Treat as autoplay blocked when backgrounded (esp. iOS PWA).
+            setTimeout(() => {
+                this.audio.removeEventListener('canplay', onCanPlay);
+                this.audio.removeEventListener('error', onError);
+                if (document.visibilityState === 'hidden' || (this.isIOS && this.isPwa)) {
+                    this.autoplayBlocked = true;
+                    resolve(false);
+                    return;
+                }
+                reject(new Error('Timeout waiting for audio to load'));
+            }, timeoutMs);
+        });
     }
 
     // Sleep Timer Methods

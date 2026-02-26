@@ -58,25 +58,26 @@ export function initializeSettings(scrobbler, player, api, ui) {
     // Email Auth UI Logic
     const toggleEmailBtn = document.getElementById('toggle-email-auth-btn');
     const cancelEmailBtn = document.getElementById('cancel-email-auth-btn');
-    const authContainer = document.getElementById('email-auth-container');
-    const authButtonsContainer = document.getElementById('auth-buttons-container');
+    const authModal = document.getElementById('email-auth-modal');
     const emailInput = document.getElementById('auth-email');
     const passwordInput = document.getElementById('auth-password');
     const signInBtn = document.getElementById('email-signin-btn');
     const signUpBtn = document.getElementById('email-signup-btn');
     const resetPasswordBtn = document.getElementById('reset-password-btn');
 
-    if (toggleEmailBtn && authContainer && authButtonsContainer) {
+    if (toggleEmailBtn && authModal) {
         toggleEmailBtn.addEventListener('click', () => {
-            authContainer.style.display = 'flex';
-            authButtonsContainer.style.display = 'none';
+            authModal.classList.add('active');
         });
     }
 
-    if (cancelEmailBtn && authContainer && authButtonsContainer) {
+    if (cancelEmailBtn && authModal) {
         cancelEmailBtn.addEventListener('click', () => {
-            authContainer.style.display = 'none';
-            authButtonsContainer.style.display = 'flex';
+            authModal.classList.remove('active');
+        });
+
+        authModal.querySelector('.modal-overlay').addEventListener('click', () => {
+            authModal.classList.remove('active');
         });
     }
 
@@ -90,8 +91,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
             }
             try {
                 await authManager.signInWithEmail(email, password);
-                authContainer.style.display = 'none';
-                authButtonsContainer.style.display = 'flex';
+                authModal.classList.remove('active');
                 emailInput.value = '';
                 passwordInput.value = '';
             } catch {
@@ -110,8 +110,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
             }
             try {
                 await authManager.signUpWithEmail(email, password);
-                authContainer.style.display = 'none';
-                authButtonsContainer.style.display = 'flex';
+                authModal.classList.remove('active');
                 emailInput.value = '';
                 passwordInput.value = '';
             } catch {
@@ -679,6 +678,61 @@ export function initializeSettings(scrobbler, player, api, ui) {
             }
         });
     });
+
+    const communityThemeContainer = document.getElementById('applied-community-theme-container');
+    const communityThemeBtn = document.getElementById('applied-community-theme-btn');
+    const communityThemeDetails = document.getElementById('community-theme-details-panel');
+    const communityThemeUnapplyBtn = document.getElementById('ct-unapply-btn');
+    const appliedThemeName = document.getElementById('applied-theme-name');
+    const ctDetailsTitle = document.getElementById('ct-details-title');
+    const ctDetailsAuthor = document.getElementById('ct-details-author');
+
+    function updateCommunityThemeUI() {
+        const metadataStr = localStorage.getItem('community-theme');
+        if (metadataStr) {
+            try {
+                const metadata = JSON.parse(metadataStr);
+                if (communityThemeContainer) communityThemeContainer.style.display = 'block';
+                if (appliedThemeName) appliedThemeName.textContent = metadata.name;
+                if (ctDetailsTitle) ctDetailsTitle.textContent = metadata.name;
+                if (ctDetailsAuthor) ctDetailsAuthor.textContent = `by ${metadata.author}`;
+            } catch {
+                if (communityThemeContainer) communityThemeContainer.style.display = 'none';
+            }
+        } else {
+            if (communityThemeContainer) communityThemeContainer.style.display = 'none';
+            if (communityThemeDetails) communityThemeDetails.style.display = 'none';
+        }
+    }
+
+    updateCommunityThemeUI();
+    window.addEventListener('theme-changed', updateCommunityThemeUI);
+
+    if (communityThemeBtn) {
+        communityThemeBtn.addEventListener('click', () => {
+            const isVisible = communityThemeDetails.style.display === 'block';
+            communityThemeDetails.style.display = isVisible ? 'none' : 'block';
+        });
+    }
+
+    if (communityThemeUnapplyBtn) {
+        communityThemeUnapplyBtn.addEventListener('click', () => {
+            if (confirm('Unapply this community theme?')) {
+                localStorage.removeItem('custom_theme_css');
+                localStorage.removeItem('community-theme');
+                const styleEl = document.getElementById('custom-theme-style');
+                if (styleEl) styleEl.remove();
+                themeManager.setTheme('system');
+
+                const themePicker = document.getElementById('theme-picker');
+                if (themePicker) {
+                    themePicker.querySelectorAll('.theme-option').forEach((opt) => opt.classList.remove('active'));
+                    themePicker.querySelector('[data-theme="system"]')?.classList.add('active');
+                }
+                document.getElementById('custom-theme-editor').classList.remove('show');
+            }
+        });
+    }
 
     function renderCustomThemeEditor() {
         const grid = document.getElementById('theme-color-grid');
@@ -2328,15 +2382,6 @@ export function initializeSettings(scrobbler, player, api, ui) {
         sidebarSectionSettings.setShowSettings(true);
     }
 
-    const sidebarShowAccountToggle = document.getElementById('sidebar-show-account-toggle');
-    if (sidebarShowAccountToggle) {
-        sidebarShowAccountToggle.checked = sidebarSectionSettings.shouldShowAccount();
-        sidebarShowAccountToggle.addEventListener('change', (e) => {
-            sidebarSectionSettings.setShowAccount(e.target.checked);
-            sidebarSectionSettings.applySidebarVisibility();
-        });
-    }
-
     const sidebarShowAboutToggle = document.getElementById('sidebar-show-about-bottom-toggle');
     if (sidebarShowAboutToggle) {
         sidebarShowAboutToggle.checked = sidebarSectionSettings.shouldShowAbout();
@@ -2540,6 +2585,14 @@ export function initializeSettings(scrobbler, player, api, ui) {
         relativePathsToggle.checked = playlistSettings.shouldUseRelativePaths();
         relativePathsToggle.addEventListener('change', (e) => {
             playlistSettings.setUseRelativePaths(e.target.checked);
+        });
+    }
+
+    const separateDiscsZipToggle = document.getElementById('separate-discs-zip-toggle');
+    if (separateDiscsZipToggle) {
+        separateDiscsZipToggle.checked = playlistSettings.shouldSeparateDiscsInZip();
+        separateDiscsZipToggle.addEventListener('change', (e) => {
+            playlistSettings.setSeparateDiscsInZip(e.target.checked);
         });
     }
 

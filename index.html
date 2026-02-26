@@ -734,6 +734,285 @@
             </div>
         </div>
 
+        <div id="edit-profile-modal" class="modal">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <h3>Edit Profile</h3>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Username</label>
+                    <input type="text" id="edit-profile-username" class="template-input" placeholder="username" />
+                    <p
+                        id="username-error"
+                        style="color: #ef4444; font-size: 0.8rem; display: none; margin-top: 0.25rem"
+                    ></p>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Display Name</label>
+                    <input
+                        type="text"
+                        id="edit-profile-display-name"
+                        class="template-input"
+                        placeholder="Display Name"
+                    />
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Avatar URL</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: stretch">
+                        <input
+                            type="url"
+                            id="edit-profile-avatar"
+                            class="template-input"
+                            placeholder="Avatar URL"
+                            style="flex: 1; margin: 0; display: none"
+                        />
+                        <input type="file" id="edit-profile-avatar-file" accept="image/*" style="display: none" />
+                        <button
+                            type="button"
+                            id="edit-profile-avatar-upload-btn"
+                            class="template-btn"
+                            style="
+                                flex: 1;
+                                padding: 0.5rem;
+                                font-size: 0.85rem;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 0.5rem;
+                                background: var(--input);
+                                border: 1px solid var(--border);
+                                color: var(--foreground);
+                                border-radius: var(--radius);
+                                cursor: pointer;
+                            "
+                        >
+                            <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="17 8 12 3 7 8" />
+                                <line x1="12" y1="3" x2="12" y2="15" />
+                            </svg>
+                            <span>Upload</span>
+                        </button>
+                        <button
+                            type="button"
+                            id="edit-profile-avatar-toggle-btn"
+                            class="template-btn"
+                            style="
+                                padding: 0.5rem;
+                                font-size: 0.85rem;
+                                white-space: nowrap;
+                                background: var(--input);
+                                border: 1px solid var(--border);
+                                color: var(--foreground);
+                                border-radius: var(--radius);
+                                cursor: pointer;
+                            "
+                            title="Switch to URL input"
+                        >
+                            or URL
+                        </button>
+                    </div>
+                    <div
+                        id="edit-profile-avatar-upload-status"
+                        style="display: none; margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.8"
+                    ></div>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Banner URL</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: stretch">
+                        <input
+                            type="url"
+                            id="edit-profile-banner"
+                            class="template-input"
+                            placeholder="Banner URL"
+                            style="flex: 1; margin: 0; display: none"
+                        />
+                        <input type="file" id="edit-profile-banner-file" accept="image/*" style="display: none" />
+                        <button
+                            type="button"
+                            id="edit-profile-banner-upload-btn"
+                            class="template-btn"
+                            style="
+                                flex: 1;
+                                padding: 0.5rem;
+                                font-size: 0.85rem;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                gap: 0.5rem;
+                                background: var(--input);
+                                border: 1px solid var(--border);
+                                color: var(--foreground);
+                                border-radius: var(--radius);
+                                cursor: pointer;
+                            "
+                        >
+                            <svg
+                                width="16"
+                                height="16"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="17 8 12 3 7 8" />
+                                <line x1="12" y1="3" x2="12" y2="15" />
+                            </svg>
+                            <span>Upload</span>
+                        </button>
+                        <button
+                            type="button"
+                            id="edit-profile-banner-toggle-btn"
+                            class="template-btn"
+                            style="
+                                padding: 0.5rem;
+                                font-size: 0.85rem;
+                                white-space: nowrap;
+                                background: var(--input);
+                                border: 1px solid var(--border);
+                                color: var(--foreground);
+                                border-radius: var(--radius);
+                                cursor: pointer;
+                            "
+                            title="Switch to URL input"
+                        >
+                            or URL
+                        </button>
+                    </div>
+                    <div
+                        id="edit-profile-banner-upload-status"
+                        style="display: none; margin-top: 0.25rem; font-size: 0.75rem; opacity: 0.8"
+                    ></div>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem"
+                        >Status (Listening to...)</label
+                    >
+                    <div class="status-picker-container">
+                        <input
+                            type="text"
+                            id="edit-profile-status-search"
+                            class="template-input"
+                            placeholder="Search for a song or album..."
+                            autocomplete="off"
+                        />
+                        <div id="status-search-results" class="search-results-dropdown"></div>
+                        <input type="hidden" id="edit-profile-status-json" />
+                        <div
+                            id="status-preview"
+                            style="
+                                display: none;
+                                margin-top: 0.5rem;
+                                padding: 0.5rem;
+                                background: var(--secondary);
+                                border-radius: var(--radius);
+                                align-items: center;
+                                gap: 0.5rem;
+                            "
+                        >
+                            <img
+                                id="status-preview-img"
+                                alt="Status preview"
+                                style="width: 32px; height: 32px; border-radius: 4px; object-fit: cover"
+                            />
+                            <div style="flex: 1; min-width: 0">
+                                <div
+                                    id="status-preview-title"
+                                    style="
+                                        font-weight: 500;
+                                        font-size: 0.9rem;
+                                        white-space: nowrap;
+                                        overflow: hidden;
+                                        text-overflow: ellipsis;
+                                    "
+                                ></div>
+                                <div
+                                    id="status-preview-subtitle"
+                                    style="
+                                        font-size: 0.8rem;
+                                        color: var(--muted-foreground);
+                                        white-space: nowrap;
+                                        overflow: hidden;
+                                        text-overflow: ellipsis;
+                                    "
+                                ></div>
+                            </div>
+                            <button id="clear-status-btn" class="btn-icon" style="width: 24px; height: 24px">
+                                &times;
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem"
+                        >Favorite Albums (Max 5)</label
+                    >
+                    <div
+                        id="edit-favorite-albums-list"
+                        style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem"
+                    ></div>
+                    <div class="status-picker-container">
+                        <input
+                            type="text"
+                            id="edit-favorite-albums-search"
+                            class="template-input"
+                            placeholder="Search for an album..."
+                            autocomplete="off"
+                        />
+                        <div id="edit-favorite-albums-results" class="search-results-dropdown"></div>
+                    </div>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">About Me</label>
+                    <textarea
+                        id="edit-profile-about"
+                        class="template-input"
+                        style="resize: vertical; min-height: 80px"
+                        placeholder="Tell us about yourself"
+                    ></textarea>
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Website</label>
+                    <input type="url" id="edit-profile-website" class="template-input" placeholder="https://..." />
+                </div>
+                <div style="margin-bottom: 1rem">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Last.fm Username</label>
+                    <input type="text" id="edit-profile-lastfm" class="template-input" placeholder="Last.fm Username" />
+                    <p style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 0.5rem; line-height: 1.5">
+                        Integrating Last.fm enables recent activity and top stats on your profile. Authorize it in
+                        <strong>Settings &gt; Scrobbling</strong>. Note: Last.fm authorization is stored locally and
+                        must be repeated on each device.
+                    </p>
+                </div>
+
+                <h4 style="margin-top: 1.5rem; margin-bottom: 1rem; font-size: 1rem">Privacy</h4>
+                <div class="setting-item" style="padding: 0.5rem 0; border: none">
+                    <div class="info"><span class="label">Public Playlists</span></div>
+                    <label class="toggle-switch"
+                        ><input type="checkbox" id="privacy-playlists-toggle" checked /><span class="slider"></span
+                    ></label>
+                </div>
+                <div class="setting-item" style="padding: 0.5rem 0; border: none">
+                    <div class="info"><span class="label">Show Last.fm Link & Stats</span></div>
+                    <label class="toggle-switch"
+                        ><input type="checkbox" id="privacy-lastfm-toggle" checked /><span class="slider"></span
+                    ></label>
+                </div>
+
+                <div class="modal-actions">
+                    <button id="edit-profile-cancel" class="btn-secondary">Cancel</button>
+                    <button id="edit-profile-save" class="btn-primary">Save Profile</button>
+                </div>
+            </div>
+        </div>
+
         <div id="folder-modal" class="modal">
             <div class="modal-overlay"></div>
             <div class="modal-content">
@@ -756,6 +1035,41 @@
                     <button id="folder-modal-cancel" class="btn-secondary">Cancel</button>
                     <button id="folder-modal-save" class="btn-primary">Save</button>
                 </div>
+            </div>
+        </div>
+
+        <div id="email-auth-modal" class="modal">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <h3 style="text-align: center; margin-bottom: 10px">Email Authentication</h3>
+                <input
+                    type="email"
+                    id="auth-email"
+                    class="template-input"
+                    placeholder="Email Address"
+                    style="margin-bottom: 0.5rem"
+                />
+                <input
+                    type="password"
+                    id="auth-password"
+                    class="template-input"
+                    placeholder="Password"
+                    style="margin-bottom: 1rem"
+                />
+                <div style="display: flex; gap: 10px; justify-content: center; margin-top: 10px">
+                    <button id="email-signin-btn" class="btn-primary" style="flex: 1">Sign In</button>
+                    <button id="email-signup-btn" class="btn-secondary" style="flex: 1">Sign Up</button>
+                </div>
+                <button
+                    id="reset-password-btn"
+                    class="btn-secondary"
+                    style="width: 100%; margin-top: 10px; font-size: 0.9rem"
+                >
+                    Forgot Password?
+                </button>
+                <button id="cancel-email-auth-btn" class="btn-secondary" style="width: 100%; margin-top: 10px">
+                    Cancel
+                </button>
             </div>
         </div>
 
@@ -943,6 +1257,304 @@
                 </div>
             </div>
         </div>
+
+        <div id="theme-store-modal" class="modal">
+            <div class="modal-overlay"></div>
+            <div
+                class="modal-content wide"
+                style="height: 80vh; display: flex; flex-direction: column; max-height: 80vh"
+            >
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem">
+                    <h3 style="margin: 0">Theme Store</h3>
+                    <button
+                        class="close-modal-btn"
+                        style="
+                            background: none;
+                            border: none;
+                            font-size: 1.5rem;
+                            cursor: pointer;
+                            color: var(--muted-foreground);
+                        "
+                    >
+                        &times;
+                    </button>
+                </div>
+
+                <div class="search-tabs" style="margin-bottom: 1rem">
+                    <button class="search-tab active" data-tab="browse">Browse</button>
+                    <button class="search-tab" data-tab="upload">Upload</button>
+                </div>
+
+                <div
+                    id="theme-store-details"
+                    style="display: none; flex-direction: column; height: 100%; overflow: hidden"
+                >
+                    <button
+                        class="btn-secondary"
+                        id="theme-details-back-btn"
+                        style="
+                            align-self: flex-start;
+                            margin-bottom: 1rem;
+                            display: flex;
+                            align-items: center;
+                            gap: 0.5rem;
+                        "
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="m15 18-6-6 6-6" />
+                        </svg>
+                        Back
+                    </button>
+                    <div style="flex: 1; overflow-y: auto; padding-right: 0.5rem">
+                        <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 2rem">
+                            <div
+                                id="theme-details-preview-container"
+                                style="
+                                    width: 300px;
+                                    height: 220px;
+                                    flex-shrink: 0;
+                                    border: 1px solid var(--border);
+                                    border-radius: var(--radius);
+                                "
+                            ></div>
+                            <div style="flex: 1; min-width: 250px">
+                                <h2 id="theme-details-name" style="font-size: 2rem; margin-bottom: 0.5rem"></h2>
+                                <div
+                                    class="meta"
+                                    style="
+                                        color: var(--muted-foreground);
+                                        font-size: 0.9rem;
+                                        margin-bottom: 1rem;
+                                        line-height: 1.6;
+                                    "
+                                >
+                                    <div id="theme-details-author"></div>
+                                    <div>
+                                        Created: <span id="theme-details-created"></span> - Updated:
+                                        <span id="theme-details-updated"></span>
+                                    </div>
+                                    <div>Installs: <span id="theme-details-installs">0</span></div>
+                                </div>
+                                <button
+                                    id="theme-details-apply-btn"
+                                    class="btn-primary"
+                                    style="width: 100%; max-width: 200px"
+                                >
+                                    Apply Theme
+                                </button>
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 2rem">
+                            <h3 style="font-size: 1.2rem; margin-bottom: 0.5rem">Description</h3>
+                            <p
+                                id="theme-details-desc"
+                                style="white-space: pre-wrap; color: var(--foreground); line-height: 1.6"
+                            ></p>
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    id="theme-store-browse"
+                    class="search-tab-content active"
+                    style="flex: 1; overflow-y: auto; min-height: 0"
+                >
+                    <div class="track-list-search-container" style="margin: 0 0 1rem 0">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="search-icon"
+                        >
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input
+                            type="search"
+                            id="theme-store-search"
+                            placeholder="Search themes..."
+                            class="track-list-search-input"
+                            autocomplete="off"
+                        />
+                    </div>
+                    <div id="community-themes-grid" class="card-grid"></div>
+                    <div id="theme-store-loading" style="text-align: center; padding: 2rem; display: none">
+                        <div class="animate-spin" style="display: inline-block">
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <div
+                    id="theme-store-upload"
+                    class="search-tab-content"
+                    style="flex: 1; overflow-y: auto; min-height: 0"
+                >
+                    <div
+                        id="theme-upload-auth-message"
+                        style="
+                            display: none;
+                            text-align: center;
+                            padding: 2rem;
+                            flex-direction: column;
+                            align-items: center;
+                            gap: 1rem;
+                        "
+                    >
+                        <p>You need to be logged in to upload themes.</p>
+                        <button class="btn-primary" id="theme-store-login-btn">Go to Login</button>
+                    </div>
+                    <form id="theme-upload-form">
+                        <div style="margin-bottom: 1rem">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Theme Name</label>
+                            <input
+                                type="text"
+                                id="theme-upload-name"
+                                class="template-input"
+                                placeholder="My Awesome Theme"
+                                required
+                            />
+                        </div>
+                        <div style="margin-bottom: 1rem">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">Description</label>
+                            <textarea
+                                id="theme-upload-desc"
+                                class="template-input"
+                                placeholder="Describe your theme..."
+                                style="min-height: 80px; resize: vertical"
+                            ></textarea>
+                        </div>
+                        <div style="margin-bottom: 1rem">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem"
+                                >Author Website (Optional)</label
+                            >
+                            <input
+                                type="url"
+                                id="theme-upload-website"
+                                class="template-input"
+                                placeholder="https://example.com"
+                            />
+                            <p style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 0.25rem">
+                                It is recommended to create a Monochrome profile instead.
+                            </p>
+                        </div>
+                        <div style="margin-bottom: 1rem">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem">CSS</label>
+                            <p style="font-size: 0.8rem; color: var(--muted-foreground); margin-bottom: 0.5rem">
+                                Define your CSS variables or custom styles here.
+                                <a
+                                    href="https://github.com/monochrome-music/monochrome/blob/main/THEME_GUIDE.md"
+                                    target="_blank"
+                                    style="text-decoration: underline; color: var(--primary)"
+                                    >Read the Theme Guide</a
+                                >.
+                            </p>
+                            <div class="theme-editor-toolbar">
+                                <div class="color-picker-group">
+                                    <input type="color" id="te-bg-color" title="Background" />
+                                    <input type="color" id="te-fg-color" title="Foreground" />
+                                    <input type="color" id="te-primary-color" title="Primary" />
+                                    <input type="color" id="te-sec-color" title="Secondary" />
+                                    <input type="color" id="te-accent-color" title="Accent/Highlight" />
+                                    <input type="color" id="te-card-color" title="Card Background" />
+                                    <input type="color" id="te-border-color" title="Border Color" />
+                                    <input type="color" id="te-muted-color" title="Muted Text" />
+                                </div>
+                                <div class="style-picker-group">
+                                    <select id="te-font-family" title="Font Family">
+                                        <option value="">Font...</option>
+                                        <option value="'Inter', sans-serif">Inter</option>
+                                        <option value="system-ui, -apple-system, sans-serif">System</option>
+                                        <option value="'Courier New', monospace">Mono</option>
+                                        <option value="'Times New Roman', serif">Serif</option>
+                                    </select>
+                                    <input
+                                        type="text"
+                                        id="te-font-custom"
+                                        placeholder="Custom Font..."
+                                        style="
+                                            height: 24px;
+                                            padding: 0 4px;
+                                            font-size: 0.75rem;
+                                            width: 100px;
+                                            border: 1px solid var(--border);
+                                            border-radius: var(--radius-sm);
+                                            background: var(--input);
+                                            color: var(--foreground);
+                                        "
+                                    />
+                                    <select id="te-radius" title="Border Radius">
+                                        <option value="">Radius...</option>
+                                        <option value="0px">Square</option>
+                                        <option value="4px">Small</option>
+                                        <option value="8px">Medium</option>
+                                        <option value="16px">Large</option>
+                                    </select>
+                                </div>
+                                <div class="editor-actions">
+                                    <button
+                                        type="button"
+                                        id="te-insert-template"
+                                        class="btn-secondary"
+                                        style="padding: 2px 8px; font-size: 0.8rem"
+                                    >
+                                        Template
+                                    </button>
+                                    <button
+                                        type="button"
+                                        id="te-toggle-preview"
+                                        class="btn-secondary"
+                                        style="padding: 2px 8px; font-size: 0.8rem"
+                                    >
+                                        Preview
+                                    </button>
+                                </div>
+                            </div>
+                            <textarea
+                                id="theme-upload-css"
+                                class="template-input"
+                                style="min-height: 200px; font-family: monospace; white-space: pre"
+                                placeholder=":root {&#10;    --background: #000000;&#10;    --foreground: #ffffff;&#10;    /* ... */&#10;}"
+                                required
+                            ></textarea>
+                        </div>
+                        <div class="modal-actions">
+                            <button type="submit" class="btn-primary">Upload Theme</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div id="theme-preview-window" style="display: none"></div>
 
         <div id="tracker-modal" class="modal tracker-modal">
             <div class="modal-overlay"></div>
@@ -1213,40 +1825,6 @@
                                     <span>Settings</span>
                                 </a>
                             </li>
-                            <li class="nav-item" id="sidebar-nav-account">
-                                <a href="/account">
-                                    <svg
-                                        width="24"
-                                        height="24"
-                                        viewBox="0 0 24 24"
-                                        id="Layer_1"
-                                        data-name="Layer 1"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        fill="currentColor"
-                                    >
-                                        <g stroke-width="0"></g>
-                                        <g stroke-linecap="round" stroke-linejoin="round"></g>
-                                        <g>
-                                            <defs>
-                                                <style>
-                                                    .cls-1 {
-                                                        fill: none;
-                                                        stroke: currentColor;
-                                                        stroke-miterlimit: 10;
-                                                        stroke-width: 1.9200000000000004;
-                                                    }
-                                                </style>
-                                            </defs>
-                                            <circle class="cls-1" cx="12" cy="7.25" r="5.73"></circle>
-                                            <path
-                                                class="cls-1"
-                                                d="M1.5,23.48l.37-2.05A10.3,10.3,0,0,1,12,13h0a10.3,10.3,0,0,1,10.13,8.45l.37,2.05"
-                                            ></path>
-                                        </g>
-                                    </svg>
-                                    <span>Account</span>
-                                </a>
-                            </li>
                         </ul>
                     </nav>
                     <div class="sidebar-bottom-container">
@@ -1386,6 +1964,43 @@
                             <line x1="3" y1="18" x2="21" y2="18"></line>
                         </svg>
                     </button>
+                    <div class="header-account-control" style="position: relative; margin-right: 1rem">
+                        <button
+                            id="header-account-btn"
+                            class="btn-icon"
+                            title="Account"
+                            style="
+                                width: 36px;
+                                height: 36px;
+                                border-radius: 50%;
+                                overflow: hidden;
+                                padding: 0;
+                                border: 1px solid var(--border);
+                            "
+                        >
+                            <svg
+                                id="header-account-icon"
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="20"
+                                height="20"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                            <img
+                                id="header-account-img"
+                                alt="Account avatar"
+                                style="width: 100%; height: 100%; object-fit: cover; display: none"
+                            />
+                        </button>
+                        <div id="header-account-dropdown" class="dropdown-menu"></div>
+                    </div>
                     <form class="search-bar" id="search-form">
                         <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -2090,23 +2705,6 @@
                                     </svg>
                                     <span>Download</span>
                                 </button>
-                                <button id="add-playlist-to-playlist-btn" class="btn-secondary" title="Add to Playlist">
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        width="20"
-                                        height="20"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="2"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                    >
-                                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                                    </svg>
-                                    <span>Add to Playlist</span>
-                                </button>
                                 <button
                                     id="like-playlist-btn"
                                     class="btn-secondary like-btn"
@@ -2177,8 +2775,31 @@
                         id="playlist-section-recommended"
                         style="display: none; margin-top: 3rem"
                     >
-                        <h2 class="section-title">Recommended Songs</h2>
-                        <p style="color: grey; margin-bottom: 15px">Suggested Songs From Your Playlist</p>
+                        <div class="section-header-row">
+                            <div>
+                                <h2 class="section-title">Recommended Songs</h2>
+                                <p style="color: grey; margin-bottom: 15px">Suggested Songs From Your Playlist</p>
+                            </div>
+                            <button
+                                id="refresh-recommended-songs-btn"
+                                class="btn-secondary"
+                                title="Refresh Recommendations"
+                            >
+                                <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                >
+                                    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                                    <path d="M21 3v5h-5" />
+                                </svg>
+                            </button>
+                        </div>
                         <div class="track-list" id="playlist-detail-recommended"></div>
                     </section>
                 </section>
@@ -2288,6 +2909,8 @@
                         <div class="detail-header-info">
                             <h1 class="title" id="artist-detail-name"></h1>
                             <div class="meta" id="artist-detail-meta"></div>
+                            <div id="artist-detail-socials" class="artist-socials"></div>
+                            <div id="artist-detail-bio" class="artist-bio"></div>
                             <div class="detail-header-actions">
                                 <button id="play-artist-radio-btn" class="btn-primary" title="Artist Radio">
                                     <svg
@@ -2533,6 +3156,73 @@
                     </section>
                 </div>
 
+                <div id="page-profile" class="page">
+                    <div class="profile-header-container">
+                        <div class="profile-banner" id="profile-banner"></div>
+                        <div class="profile-info-section">
+                            <img id="profile-avatar" src="/assets/appicon.png" class="profile-avatar" alt="Avatar" />
+                            <div class="profile-details">
+                                <h1 id="profile-display-name">User</h1>
+                                <div id="profile-username" class="profile-username">@username</div>
+                                <div id="profile-status" class="profile-status" style="display: none"></div>
+                                <div id="profile-about" class="profile-about"></div>
+                                <div class="profile-links">
+                                    <a
+                                        id="profile-website"
+                                        href="#"
+                                        target="_blank"
+                                        class="profile-link"
+                                        style="display: none"
+                                        >Website</a
+                                    >
+                                    <a
+                                        id="profile-lastfm"
+                                        href="#"
+                                        target="_blank"
+                                        class="profile-link"
+                                        style="display: none"
+                                        >Last.fm</a
+                                    >
+                                </div>
+                            </div>
+                            <div class="profile-actions">
+                                <button id="profile-edit-btn" class="btn-secondary" style="display: none">
+                                    Edit Profile
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="profile-content">
+                        <h2 class="section-title">Public Playlists</h2>
+                        <div class="card-grid" id="profile-playlists-container"></div>
+                        <div id="profile-favorite-albums-section" style="display: none; margin-top: 3rem">
+                            <h2 class="section-title">Favorite Albums of All Time</h2>
+                            <div id="profile-favorite-albums-container"></div>
+                        </div>
+                        <div id="profile-recent-scrobbles-section" style="display: none; margin-top: 3rem">
+                            <div style="display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1rem">
+                                <h2 class="section-title" style="margin-bottom: 0">Recent Scrobbling</h2>
+                                <span style="font-size: 0.8rem; color: var(--muted-foreground)"
+                                    >Powered by Last.fm</span
+                                >
+                            </div>
+                            <div class="track-list" id="profile-recent-scrobbles-container"></div>
+                        </div>
+                        <div id="profile-top-artists-section" style="display: none; margin-top: 3rem">
+                            <h2 class="section-title">Top Artists</h2>
+                            <div class="card-grid" id="profile-top-artists-container"></div>
+                        </div>
+                        <div id="profile-top-albums-section" style="display: none; margin-top: 3rem">
+                            <h2 class="section-title">Top Albums</h2>
+                            <div class="card-grid" id="profile-top-albums-container"></div>
+                        </div>
+                        <div id="profile-top-tracks-section" style="display: none; margin-top: 3rem">
+                            <h2 class="section-title">Top Tracks</h2>
+                            <div class="track-list" id="profile-top-tracks-container"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="page-settings" class="page">
                     <h2 class="section-title">Settings</h2>
                     <form
@@ -2605,6 +3295,52 @@
                                     <div class="theme-option" data-theme="latte">Latte</div>
                                     <div class="theme-option" data-theme="custom">Custom</div>
                                 </div>
+                                <div id="applied-community-theme-container" style="display: none; margin-top: 1rem">
+                                    <button
+                                        id="applied-community-theme-btn"
+                                        class="btn-secondary"
+                                        style="
+                                            width: 100%;
+                                            display: flex;
+                                            justify-content: space-between;
+                                            align-items: center;
+                                            padding: 1rem;
+                                        "
+                                    >
+                                        <span>Applied Community Theme</span>
+                                        <span
+                                            id="applied-theme-name"
+                                            style="color: var(--muted-foreground); font-size: 0.9rem"
+                                        ></span>
+                                    </button>
+                                    <div
+                                        id="community-theme-details-panel"
+                                        style="
+                                            display: none;
+                                            padding: 1rem;
+                                            background: var(--secondary);
+                                            border-radius: var(--radius);
+                                            margin-top: 0.5rem;
+                                            border: 1px solid var(--border);
+                                        "
+                                    >
+                                        <div
+                                            style="margin-bottom: 0.5rem; font-weight: 600"
+                                            id="ct-details-title"
+                                        ></div>
+                                        <div
+                                            style="
+                                                margin-bottom: 1rem;
+                                                font-size: 0.9rem;
+                                                color: var(--muted-foreground);
+                                            "
+                                            id="ct-details-author"
+                                        ></div>
+                                        <button id="ct-unapply-btn" class="btn-secondary danger" style="width: 100%">
+                                            Unapply Theme
+                                        </button>
+                                    </div>
+                                </div>
                                 <div class="custom-theme-editor" id="custom-theme-editor">
                                     <h4>Custom Theme</h4>
                                     <div class="theme-color-grid" id="theme-color-grid"></div>
@@ -2612,6 +3348,15 @@
                                         <button class="btn-secondary" id="apply-custom-theme">Apply Theme</button>
                                         <button class="btn-secondary" id="reset-custom-theme">Reset</button>
                                     </div>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Community Themes</span>
+                                        <span class="description"
+                                            >Browse and apply themes created by the community</span
+                                        >
+                                    </div>
+                                    <button id="open-theme-store-btn" class="btn-secondary">Open Theme Store</button>
                                 </div>
                                 <div class="setting-item font-settings-container">
                                     <div class="info">
@@ -3037,18 +3782,6 @@
                                         </div>
                                         <label class="toggle-switch">
                                             <input type="checkbox" id="sidebar-show-settings-toggle" checked />
-                                            <span class="slider"></span>
-                                        </label>
-                                    </div>
-                                    <div class="setting-item">
-                                        <div class="info">
-                                            <span class="label">Show Account in Sidebar</span>
-                                            <span class="description"
-                                                >Display the Account link in the sidebar navigation</span
-                                            >
-                                        </div>
-                                        <label class="toggle-switch">
-                                            <input type="checkbox" id="sidebar-show-account-toggle" checked />
                                             <span class="slider"></span>
                                         </label>
                                     </div>
@@ -4145,6 +4878,18 @@
                                         <span class="slider"></span>
                                     </label>
                                 </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Separate Discs in ZIP</span>
+                                        <span class="description"
+                                            >Put tracks in Disc folders when a release has multiple discs</span
+                                        >
+                                    </div>
+                                    <label class="toggle-switch">
+                                        <input type="checkbox" id="separate-discs-zip-toggle" />
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4199,6 +4944,17 @@
                                         >
                                     </div>
                                     <button id="reset-local-data-btn" class="btn-secondary danger">Reset</button>
+                                </div>
+                                <div class="setting-item">
+                                    <div class="info">
+                                        <span class="label">Clear Cloud Data</span>
+                                        <span class="description"
+                                            >Delete all your data from the cloud (cannot be undone)</span
+                                        >
+                                    </div>
+                                    <button id="firebase-clear-cloud-btn" class="btn-secondary danger">
+                                        Clear Cloud Data
+                                    </button>
                                 </div>
                                 <div class="setting-item">
                                     <div class="info">
@@ -4400,33 +5156,13 @@
                                 </svg>
                                 View on GitHub
                             </a>
-                            <br />
-                            <a
-                                href="https://github.com/eduardprigoana/monochrome"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="github-link"
-                            >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    width="24"
-                                    height="24"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    class="lucide lucide-github-icon lucide-github"
-                                >
-                                    <path
-                                        d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"
-                                    />
-                                    <path d="M9 18c-4.51 2-5-2-7-2" />
-                                </svg>
-                                View on GitHub (Original Repo)
-                            </a>
                         </div>
+                        <p style="text-align: center; color: grey">
+                            made with ‪‪❤︎‬ by
+                            <a href="https://prigoana.com/" style="text-decoration: underline">Edideaur</a>,
+                            <a href="https://samidy.com" style="text-decoration: underline">Samidy</a> &
+                            <a href="https://github.com/JulienMaille" style="text-decoration: underline">Julien</a>
+                        </p>
                         <div class="about-footer">
                             <p class="version">Version 2.2.0</p>
                             <p class="disclaimer">
@@ -4466,46 +5202,11 @@
                         >
                             <button id="firebase-connect-btn" class="btn-secondary">Connect with Google</button>
                             <button id="toggle-email-auth-btn" class="btn-secondary">Connect with Email</button>
-                            <button id="firebase-clear-cloud-btn" class="btn-secondary danger">Clear Cloud Data</button>
+                            <button id="view-my-profile-btn" class="btn-secondary" style="display: none">
+                                View My Profile
+                            </button>
                         </div>
 
-                        <div
-                            id="email-auth-container"
-                            style="
-                                display: none;
-                                flex-direction: column;
-                                gap: 15px;
-                                width: 100%;
-                                max-width: 320px;
-                                margin: 20px auto;
-                                padding: 20px;
-                                background: var(--card);
-                                border-radius: var(--radius);
-                                border: 1px solid var(--border);
-                            "
-                        >
-                            <h3 style="text-align: center; margin-bottom: 10px">Email Authentication</h3>
-                            <input type="email" id="auth-email" class="template-input" placeholder="Email Address" />
-                            <input type="password" id="auth-password" class="template-input" placeholder="Password" />
-                            <div style="display: flex; gap: 10px; justify-content: center; margin-top: 10px">
-                                <button id="email-signin-btn" class="btn-primary" style="flex: 1">Sign In</button>
-                                <button id="email-signup-btn" class="btn-secondary" style="flex: 1">Sign Up</button>
-                            </div>
-                            <button
-                                id="reset-password-btn"
-                                class="btn-secondary"
-                                style="width: 100%; margin-top: 10px; font-size: 0.9rem"
-                            >
-                                Forgot Password?
-                            </button>
-                            <button
-                                id="cancel-email-auth-btn"
-                                class="btn-secondary"
-                                style="width: 100%; margin-top: 10px"
-                            >
-                                Cancel
-                            </button>
-                        </div>
                         <p id="firebase-status" style="text-align: center; padding-top: 15px; color: #8b8b93">
                             Sync your library across devices
                         </p>
