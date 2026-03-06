@@ -6,10 +6,12 @@ import {
     isTrackUnavailable,
     getExtensionFromBlob,
 } from './utils.js';
-import { trackDateSettings } from './storage.js';
+import { trackDateSettings, losslessContainerSettings } from './storage.js';
 import { APICache } from './cache.js';
 import { addMetadataToAudio } from './metadata.js';
 import { DashDownloader } from './dash-downloader.js';
+import { encodeToMp3, MP3EncodingError } from './mp3-encoder.js';
+import { ffmpeg } from './ffmpeg.js';
 
 export const DASH_MANIFEST_UNAVAILABLE_CODE = 'DASH_MANIFEST_UNAVAILABLE';
 const TIDAL_V2_TOKEN = 'txNoH4kkV41MfH25';
@@ -1110,7 +1112,10 @@ export class LosslessAPI {
         const { onProgress, track } = options;
 
         try {
-            const lookup = await this.getTrack(id, quality);
+            // MP3_320 is not a native TIDAL quality, we download LOSSLESS and convert
+            const downloadQuality = quality === 'MP3_320' ? 'LOSSLESS' : quality;
+
+            const lookup = await this.getTrack(id, downloadQuality);
             let streamUrl;
             let blob;
 
@@ -1133,8 +1138,8 @@ export class LosslessAPI {
                     });
                 } catch (dashError) {
                     console.error('DASH download failed:', dashError);
-                    // Fallback to LOSSLESS if DASH fails
-                    if (quality !== 'LOSSLESS') {
+                    // Fallback to LOSSLESS if DASH fails, but not if we're already downloading LOSSLESS
+                    if (downloadQuality !== 'LOSSLESS') {
                         console.warn('Falling back to LOSSLESS (16-bit) download.');
                         return this.downloadTrack(id, 'LOSSLESS', filename, options);
                     }
@@ -1189,6 +1194,58 @@ export class LosslessAPI {
                 }
             }
 
+            // Convert to MP3 320kbps if requested
+            if (quality === 'MP3_320') {
+                try {
+                    blob = await encodeToMp3(blob, onProgress, options.signal);
+                } catch (encodingError) {
+                    if (onProgress) {
+                        onProgress({
+                            stage: 'error',
+                            message: `Encoding failed: ${encodingError.message}`,
+                        });
+                    }
+                    throw encodingError;
+                }
+            }
+
+            if (quality.endsWith('LOSSLESS')) {
+                try {
+                    switch (losslessContainerSettings.getContainer()) {
+                        case 'flac':
+                            if ((await getExtensionFromBlob(blob)) != 'flac') {
+                                blob = await ffmpeg(
+                                    blob,
+                                    { args: ['-c:a', 'copy'] },
+                                    'output.flac',
+                                    'audio/flac',
+                                    onProgress,
+                                    options.signal
+                                );
+                            }
+                            break;
+                        case 'alac':
+                            blob = await ffmpeg(
+                                blob,
+                                { args: ['-c:a', 'alac'] },
+                                'output.m4a',
+                                'audio/mp4',
+                                onProgress,
+                                options.signal
+                            );
+                            break;
+                        default:
+                            break;
+                    }
+                } catch (error) {
+                    if (error?.name === 'AbortError') {
+                        throw error;
+                    }
+
+                    console.error('Lossless container conversion failed:', error);
+                }
+            }
+
             // Add metadata if track information is provided
             if (track) {
                 if (onProgress) {
@@ -1197,7 +1254,18 @@ export class LosslessAPI {
                         message: 'Adding metadata...',
                     });
                 }
-                blob = await addMetadataToAudio(blob, track, this, quality);
+
+                const enrichedTrack = { ...track };
+                if (lookup.info) {
+                    enrichedTrack.replayGain = {
+                        trackReplayGain: lookup.info.trackReplayGain,
+                        trackPeakAmplitude: lookup.info.trackPeakAmplitude,
+                        albumReplayGain: lookup.info.albumReplayGain,
+                        albumPeakAmplitude: lookup.info.albumPeakAmplitude,
+                    };
+                }
+
+                blob = await addMetadataToAudio(blob, enrichedTrack, this, quality);
             }
 
             // Detect actual format and fix filename extension if needed
@@ -1216,6 +1284,9 @@ export class LosslessAPI {
                 throw error;
             }
             console.error('Download failed:', error);
+            if (error instanceof MP3EncodingError || error.code === 'MP3_ENCODING_FAILED') {
+                throw error;
+            }
             if (error.message === RATE_LIMIT_ERROR_MESSAGE) {
                 throw error;
             }

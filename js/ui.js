@@ -31,6 +31,7 @@ import {
     homePageSettings,
     fontSettings,
     contentBlockingSettings,
+    settingsUiState,
 } from './storage.js';
 import { db } from './db.js';
 import { getVibrantColorFromImage } from './vibrant-color.js';
@@ -1009,7 +1010,13 @@ export class UIRenderer {
             if (this.visualizer) {
                 this.visualizer.start();
             }
+
+            // Add visualizer-active class for enhanced drop shadow
+            overlay.classList.add('visualizer-active');
         };
+
+        // Setup UI toggle button
+        this.setupUIToggleButton(overlay);
 
         if (localStorage.getItem('epilepsy-warning-dismissed') === 'true') {
             startVisualizer();
@@ -1039,6 +1046,7 @@ export class UIRenderer {
     closeFullscreenCover() {
         const overlay = document.getElementById('fullscreen-cover-overlay');
         overlay.style.display = 'none';
+        overlay.classList.remove('visualizer-active', 'ui-hidden');
 
         const playerBar = document.querySelector('.now-playing-bar');
         if (playerBar) playerBar.style.removeProperty('display');
@@ -1051,6 +1059,87 @@ export class UIRenderer {
         if (this.visualizer) {
             this.visualizer.stop();
         }
+
+        // Clear UI toggle button timers
+        if (this.uiToggleMouseTimer) {
+            clearTimeout(this.uiToggleMouseTimer);
+            this.uiToggleMouseTimer = null;
+        }
+    }
+
+    setupUIToggleButton(overlay) {
+        const toggleBtn = document.getElementById('toggle-ui-btn');
+        if (!toggleBtn) return;
+
+        let isUIHidden = overlay.classList.contains('ui-hidden');
+        toggleBtn.classList.toggle('active', isUIHidden);
+        toggleBtn.title = isUIHidden ? 'Show UI' : 'Hide UI';
+
+        // Show button
+        const showButton = () => {
+            toggleBtn.classList.add('visible');
+        };
+
+        // Hide button
+        const hideButton = () => {
+            toggleBtn.classList.remove('visible');
+        };
+
+        // Initial state: hide button if UI is hidden
+        if (isUIHidden) {
+            hideButton();
+        } else {
+            showButton();
+        }
+
+        // Mouse move handler
+        const handleMouseMove = (e) => {
+            const rect = overlay.getBoundingClientRect();
+            // Check if mouse is near the top-right corner (within 150px from right, 100px from top)
+            const isNearTopRight = e.clientY < 100 && e.clientX > rect.width - 150;
+
+            if (isUIHidden) {
+                // When UI is hidden, only show button when mouse is near top-right
+                if (isNearTopRight) {
+                    showButton();
+                } else {
+                    hideButton();
+                }
+            }
+            // When UI is visible, button stays visible (no auto-hide)
+        };
+
+        // Toggle UI visibility
+        const toggleUI = () => {
+            isUIHidden = !isUIHidden;
+            overlay.classList.toggle('ui-hidden', isUIHidden);
+            toggleBtn.classList.toggle('active', isUIHidden);
+            toggleBtn.title = isUIHidden ? 'Show UI' : 'Hide UI';
+
+            if (isUIHidden) {
+                // When UI is hidden, immediately hide the button
+                // It will reappear when mouse nears top-right
+                hideButton();
+            } else {
+                // When UI is shown, keep button visible
+                showButton();
+            }
+        };
+
+        // Add event listeners
+        toggleBtn.addEventListener('click', toggleUI);
+        overlay.addEventListener('mousemove', handleMouseMove);
+        overlay.addEventListener('mouseleave', () => {
+            if (isUIHidden) {
+                hideButton();
+            }
+        });
+
+        // Store cleanup function
+        this.uiToggleCleanup = () => {
+            toggleBtn.removeEventListener('click', toggleUI);
+            overlay.removeEventListener('mousemove', handleMouseMove);
+        };
     }
 
     setupFullscreenControls(audioPlayer) {
@@ -1360,6 +1449,17 @@ export class UIRenderer {
 
         if (pageId === 'settings') {
             this.renderApiSettings();
+            const savedTabName = settingsUiState.getActiveTab();
+            const savedTab = document.querySelector(`.settings-tab[data-tab="${savedTabName}"]`);
+            if (savedTab) {
+                document.querySelectorAll('.settings-tab').forEach((t) => t.classList.remove('active'));
+                document.querySelectorAll('.settings-tab-content').forEach((c) => c.classList.remove('active'));
+                savedTab.classList.add('active');
+                document.getElementById(`settings-tab-${savedTabName}`)?.classList.add('active');
+            }
+        } else {
+            document.querySelectorAll('.settings-tab').forEach((t) => t.classList.remove('active'));
+            document.querySelectorAll('.settings-tab-content').forEach((c) => c.classList.remove('active'));
         }
     }
 
@@ -1529,6 +1629,7 @@ export class UIRenderer {
 
         try {
             this.showPage('home');
+            this.setupHomeTabs();
 
             const welcomeEl = document.getElementById('home-welcome');
             const contentEl = document.getElementById('home-content');
@@ -1595,6 +1696,234 @@ export class UIRenderer {
             ]);
         } finally {
             this.renderLock = false;
+        }
+    }
+
+    setupHomeTabs() {
+        const tabs = document.querySelectorAll('.home-tab');
+        if (tabs.length === 0) return;
+
+        if (tabs[0].dataset.initialized) return;
+
+        tabs.forEach((tab) => {
+            tab.dataset.initialized = 'true';
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.home-tab').forEach((t) => t.classList.remove('active'));
+                document.querySelectorAll('.home-view').forEach((v) => {
+                    v.style.display = 'none';
+                    v.classList.remove('active');
+                });
+
+                tab.classList.add('active');
+                const viewId = `home-view-${tab.dataset.tab}`;
+                const view = document.getElementById(viewId);
+                if (view) {
+                    view.style.display = 'block';
+                    view.classList.add('active');
+                }
+
+                if (tab.dataset.tab === 'explore') {
+                    this.renderExplorePage();
+                }
+            });
+        });
+    }
+
+    async renderExplorePage() {
+        const container = document.getElementById('explore-grid');
+        if (!container) return;
+
+        if (container.children.length > 0) return;
+
+        container.classList.remove('card-grid');
+
+        container.innerHTML = `<div class="card-grid">${this.createSkeletonCards(12)}</div>`;
+
+        try {
+            const response = await fetch('https://hot.monochrome.tf/');
+            if (!response.ok) throw new Error('Failed to load explore data');
+            const data = await response.json();
+
+            container.innerHTML = '';
+
+            const GENRES = [
+                { id: 'hip_hop', name: 'Hip Hop / Rap' },
+                { id: 'pop', name: 'Pop' },
+                { id: 'rock', name: 'Rock' },
+                { id: 'electronic', name: 'Electronic' },
+                { id: 'country', name: 'Country' },
+                { id: 'jazz', name: 'Jazz' },
+                { id: 'classical', name: 'Classical' },
+                { id: 'latin', name: 'Latin' },
+                { id: 'reggae', name: 'Reggae / Dancehall' },
+                { id: 'blues', name: 'Blues' },
+                { id: 'soundtrack', name: 'Soundtrack' },
+                { id: 'alternative', name: 'Alternative' },
+            ];
+
+            if (GENRES.length > 0) {
+                const genresSection = document.createElement('section');
+                genresSection.className = 'content-section';
+                genresSection.innerHTML = `<h2 class="section-title">Genres</h2>`;
+
+                const genresGrid = document.createElement('div');
+                genresGrid.className = 'card-grid';
+                genresGrid.innerHTML = GENRES
+                    .map(
+                        (genre) => `
+                    <div class="card genre-card" data-genre-id="${genre.id}" data-genre-name="${escapeHtml(genre.name)}" style="cursor: pointer; background: var(--secondary); padding: 1.5rem; display: flex; align-items: center; justify-content: center; text-align: center; min-height: 100px; border-radius: var(--radius); border: 1px solid var(--border);">
+                        <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600;">${escapeHtml(genre.name)}</h3>
+                    </div>
+                `
+                    )
+                    .join('');
+
+                genresSection.appendChild(genresGrid);
+                container.appendChild(genresSection);
+
+                genresGrid.querySelectorAll('.genre-card').forEach((card) => {
+                    card.addEventListener('click', () => {
+                        this.renderGenrePage(card.dataset.genreId, card.dataset.genreName);
+                    });
+                });
+            }
+
+            if (data.top_albums && data.top_albums.length > 0) {
+                this.renderExploreSection(container, 'Trending Albums', data.top_albums, 'album');
+            }
+
+            if (data.top_tracks && data.top_tracks.length > 0) {
+                this.renderExploreSection(container, 'Trending Tracks', data.top_tracks, 'track');
+            }
+
+            if (data.featured_playlists && data.featured_playlists.length > 0) {
+                this.renderExploreSection(container, 'Featured Playlists', data.featured_playlists, 'playlist');
+            }
+
+            if (data.sections && data.sections.length > 0) {
+                data.sections.forEach((section) => {
+                    if (section.items && section.items.length > 0) {
+                        let type = null;
+                        if (section.type === 'ALBUM_LIST') type = 'album';
+                        else if (section.type === 'TRACK_LIST') type = 'track';
+                        else if (section.type === 'PLAYLIST_LIST') type = 'playlist';
+
+                        if (type) {
+                            this.renderExploreSection(container, section.title, section.items, type);
+                        }
+                    }
+                });
+            }
+
+            if (container.children.length === 0) {
+                container.innerHTML = createPlaceholder('No explore content available.');
+            }
+        } catch (e) {
+            console.error(e);
+            container.innerHTML = createPlaceholder('Failed to load explore content.');
+        }
+    }
+
+    renderExploreSection(container, title, items, type) {
+        const section = document.createElement('section');
+        section.className = 'content-section';
+        section.innerHTML = `<h2 class="section-title">${title}</h2>`;
+
+        if (type === 'track') {
+            const list = document.createElement('div');
+            list.className = 'track-list';
+            this.renderListWithTracks(list, items, true);
+            section.appendChild(list);
+        } else {
+            const grid = document.createElement('div');
+            grid.className = 'card-grid';
+            grid.innerHTML = items
+                .map((item) => {
+                    if (type === 'album') return this.createAlbumCardHTML(item);
+                    if (type === 'playlist') return this.createPlaylistCardHTML(item);
+                    return '';
+                })
+                .join('');
+
+            items.forEach((item) => {
+                let selector;
+                if (type === 'album') selector = `[data-album-id="${item.id}"]`;
+                if (type === 'playlist') selector = `[data-playlist-id="${item.uuid}"]`;
+
+                if (selector) {
+                    const el = grid.querySelector(selector);
+                    if (el) {
+                        trackDataStore.set(el, item);
+                        if (type === 'album') this.updateLikeState(el, 'album', item.id);
+                        if (type === 'playlist') this.updateLikeState(el, 'playlist', item.uuid);
+                    }
+                }
+            });
+            section.appendChild(grid);
+        }
+        container.appendChild(section);
+    }
+
+    async renderGenrePage(genreId, genreName) {
+        const container = document.getElementById('explore-grid');
+        if (!container) return;
+
+        container.classList.remove('card-grid');
+
+        container.innerHTML = `
+            <div style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                <button class="btn-secondary explore-back-btn" style="display: flex; align-items: center; gap: 0.5rem;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                    Back
+                </button>
+                <h2 class="section-title" style="margin: 0;">${escapeHtml(genreName)}</h2>
+            </div>
+            <div class="card-grid">${this.createSkeletonCards(12)}</div>
+        `;
+
+        container.querySelector('.explore-back-btn').addEventListener('click', () => {
+            container.innerHTML = '';
+            this.renderExplorePage();
+        });
+
+        try {
+            const response = await fetch(`https://hot.monochrome.tf/explore/genre/?id=${genreId}`);
+            if (!response.ok) throw new Error('Failed to load genre data');
+            const data = await response.json();
+
+            const header = container.firstElementChild;
+            container.innerHTML = '';
+            container.appendChild(header);
+
+            const contentContainer = document.createElement('div');
+            container.appendChild(contentContainer);
+
+            if (data.sections && data.sections.length > 0) {
+                data.sections.forEach((section) => {
+                    if (section.items && section.items.length > 0) {
+                        let type = null;
+                        if (section.type === 'ALBUM_LIST') type = 'album';
+                        else if (section.type === 'TRACK_LIST') type = 'track';
+                        else if (section.type === 'PLAYLIST_LIST') type = 'playlist';
+
+                        if (type) {
+                            this.renderExploreSection(contentContainer, section.title, section.items, type);
+                        }
+                    }
+                });
+            }
+
+            if (contentContainer.children.length === 0) {
+                contentContainer.innerHTML = createPlaceholder('No content found for this genre.');
+            }
+        } catch (e) {
+            console.error(e);
+            const header = container.firstElementChild;
+            container.innerHTML = '';
+            container.appendChild(header);
+            const errorDiv = document.createElement('div');
+            errorDiv.innerHTML = createPlaceholder('Failed to load genre content.');
+            container.appendChild(errorDiv);
         }
     }
 
@@ -2291,6 +2620,7 @@ export class UIRenderer {
                     video.muted = true;
                     video.playsInline = true;
                     video.className = imageEl.className;
+                    video.id = imageEl.id;
                     imageEl.replaceWith(video);
                 } else {
                     imageEl.src = videoCoverUrl;
@@ -2300,6 +2630,7 @@ export class UIRenderer {
                     const img = document.createElement('img');
                     img.src = coverUrl;
                     img.className = imageEl.className;
+                    img.id = imageEl.id;
                     imageEl.replaceWith(img);
                 } else {
                     imageEl.src = coverUrl;
@@ -2369,6 +2700,13 @@ export class UIRenderer {
                 const isLiked = await db.isFavorite('album', album.id);
                 albumLikeBtn.innerHTML = this.createHeartIcon(isLiked);
                 albumLikeBtn.classList.toggle('active', isLiked);
+            }
+
+            // Store album data for menu button
+            const albumMenuBtn = document.getElementById('album-menu-btn');
+            if (albumMenuBtn) {
+                albumMenuBtn.dataset.id = album.id;
+                trackDataStore.set(albumMenuBtn, album);
             }
 
             document.title = `${album.title} - ${album.artist.name}`;
@@ -3042,6 +3380,7 @@ export class UIRenderer {
                             video.muted = true;
                             video.playsInline = true;
                             video.className = imageEl.className;
+                            video.id = imageEl.id;
                             imageEl.replaceWith(video);
                         } else {
                             imageEl.src = videoCoverUrl;
@@ -3051,6 +3390,7 @@ export class UIRenderer {
                             const img = document.createElement('img');
                             img.src = coverUrl;
                             img.className = imageEl.className;
+                            img.id = imageEl.id;
                             imageEl.replaceWith(img);
                         } else {
                             imageEl.src = coverUrl;
@@ -4085,6 +4425,7 @@ export class UIRenderer {
                     video.muted = true;
                     video.playsInline = true;
                     video.className = imageEl.className;
+                    video.id = imageEl.id;
                     imageEl.replaceWith(video);
                 } else {
                     imageEl.src = videoCoverUrl;
@@ -4094,6 +4435,7 @@ export class UIRenderer {
                     const img = document.createElement('img');
                     img.src = coverUrl;
                     img.className = imageEl.className;
+                    img.id = imageEl.id;
                     imageEl.replaceWith(img);
                 } else {
                     imageEl.src = coverUrl;

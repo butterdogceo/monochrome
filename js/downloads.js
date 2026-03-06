@@ -11,10 +11,12 @@ import {
     getExtensionFromBlob,
     escapeHtml,
 } from './utils.js';
-import { lyricsSettings, bulkDownloadSettings, playlistSettings } from './storage.js';
+import { lyricsSettings, bulkDownloadSettings, losslessContainerSettings, playlistSettings } from './storage.js';
 import { addMetadataToAudio } from './metadata.js';
 import { DashDownloader } from './dash-downloader.js';
 import { generateM3U, generateM3U8, generateCUE, generateNFO, generateJSON } from './playlist-generator.js';
+import { encodeToMp3 } from './mp3-encoder.js';
+import { ffmpeg } from './ffmpeg.js';
 
 const downloadTasks = new Map();
 const bulkDownloadTasks = new Map();
@@ -272,6 +274,9 @@ async function downloadTrackBlob(track, quality, api, lyricsManager = null, sign
         artist: track.artist || (track.artists && track.artists.length > 0 ? track.artists[0] : null),
     };
 
+    // MP3_320 is not a native TIDAL quality, we download LOSSLESS and convert
+    const downloadQuality = quality === 'MP3_320' ? 'LOSSLESS' : quality;
+
     try {
         const fullTrack = await api.getTrackMetadata(track.id);
         if (fullTrack) {
@@ -306,7 +311,7 @@ async function downloadTrackBlob(track, quality, api, lyricsManager = null, sign
         }
     }
 
-    const lookup = await api.getTrack(track.id, quality);
+    const lookup = await api.getTrack(track.id, downloadQuality);
     let streamUrl;
 
     if (lookup.originalTrackUrl) {
@@ -318,6 +323,15 @@ async function downloadTrackBlob(track, quality, api, lyricsManager = null, sign
         }
     }
 
+    if (lookup.info) {
+        enrichedTrack.replayGain = {
+            trackReplayGain: lookup.info.trackReplayGain,
+            trackPeakAmplitude: lookup.info.trackPeakAmplitude,
+            albumReplayGain: lookup.info.albumReplayGain,
+            albumPeakAmplitude: lookup.info.albumPeakAmplitude,
+        };
+    }
+
     // Handle DASH streams (blob URLs)
     let blob;
     if (streamUrl.startsWith('blob:')) {
@@ -327,7 +341,7 @@ async function downloadTrackBlob(track, quality, api, lyricsManager = null, sign
         } catch (dashError) {
             console.error('DASH download failed:', dashError);
             // Fallback
-            if (quality !== 'LOSSLESS') {
+            if (downloadQuality !== 'LOSSLESS') {
                 console.warn('Falling back to LOSSLESS (16-bit) download.');
                 return downloadTrackBlob(track, 'LOSSLESS', api, lyricsManager, signal);
             }
@@ -339,6 +353,48 @@ async function downloadTrackBlob(track, quality, api, lyricsManager = null, sign
             throw new Error(`Failed to fetch track: ${response.status}`);
         }
         blob = await response.blob();
+    }
+
+    // Convert to MP3 320kbps if requested
+    if (quality === 'MP3_320') {
+        blob = await encodeToMp3(blob, () => undefined, signal);
+    }
+
+    if (quality.endsWith('LOSSLESS')) {
+        try {
+            switch (losslessContainerSettings.getContainer()) {
+                case 'flac':
+                    if ((await getExtensionFromBlob(blob)) != 'flac') {
+                        blob = await ffmpeg(
+                            blob,
+                            { args: ['-c:a', 'copy'] },
+                            'output.flac',
+                            'audio/flac',
+                            () => undefined,
+                            signal
+                        );
+                    }
+                    break;
+                case 'alac':
+                    blob = await ffmpeg(
+                        blob,
+                        { args: ['-c:a', 'alac'] },
+                        'output.m4a',
+                        'audio/mp4',
+                        () => undefined,
+                        signal
+                    );
+                    break;
+                default:
+                    break;
+            }
+        } catch (error) {
+            if (error?.name === 'AbortError') {
+                throw error;
+            }
+
+            console.error('Lossless container conversion failed:', error);
+        }
     }
 
     // Detect actual format from blob signature BEFORE adding metadata
