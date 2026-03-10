@@ -27,6 +27,7 @@ import { registerSW } from 'virtual:pwa-register';
 import './smooth-scrolling.js';
 import { openEditProfile } from './profile.js';
 import { ThemeStore } from './themeStore.js';
+import './commandPalette.js';
 
 import { initTracker } from './tracker.js';
 import {
@@ -60,6 +61,37 @@ import {
     parseDynamicCSV,
     importToLibrary,
 } from './playlist-importer.js';
+
+// Capture real iOS state before spoofing (needed for background audio)
+if (typeof window !== 'undefined') {
+    const _ua = navigator.userAgent.toLowerCase();
+    window.__IS_IOS__ = /iphone|ipad|ipod/.test(_ua) || (_ua.includes('mac') && navigator.maxTouchPoints > 1);
+
+    // Spoof User-Agent to bypass Google's embedded browser check
+    Object.defineProperty(navigator, 'userAgent', {
+        get: function () {
+            return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+        },
+    });
+
+    // analytics
+    const plausibleScript = document.createElement('script');
+    plausibleScript.async = true;
+    plausibleScript.src = 'https://plausible.canine.tools/js/pa-dCMvQpiD1-AJmi8o3xviO.js';
+    document.head.appendChild(plausibleScript);
+
+    window.plausible =
+        window.plausible ||
+        function () {
+            (window.plausible.q = window.plausible.q || []).push(arguments);
+        };
+    window.plausible.init =
+        window.plausible.init ||
+        function (i) {
+            window.plausible.o = i || {};
+        };
+    window.plausible.init();
+}
 
 // Lazy-loaded modules
 let settingsModule = null;
@@ -410,6 +442,46 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             const desktopModule = await import('./desktop/desktop.js');
             await desktopModule.initDesktop(player);
+
+            import('./desktop/neutralino-bridge.js').then(({ updater }) => {
+                setTimeout(async () => {
+                    try {
+                        // my worker should detect a users OS and serve the right ver
+                        const update = await updater.checkForUpdates('https://update.samidy.xyz/update.json');
+
+                        if (update && update.available) {
+                            const modal = document.getElementById('desktop-update-modal');
+                            const notes = document.getElementById('desktop-update-notes');
+                            const confirmBtn = document.getElementById('desktop-update-confirm');
+                            const cancelBtn = document.getElementById('desktop-update-cancel');
+
+                            if (modal) {
+                                notes.innerHTML = update.notes || 'Bug fixes and improvements.';
+                                modal.classList.add('active');
+
+                                confirmBtn.onclick = async () => {
+                                    confirmBtn.disabled = true;
+                                    confirmBtn.textContent = 'Updating...';
+                                    try {
+                                        await updater.install();
+                                    } catch (err) {
+                                        console.error(err);
+                                        confirmBtn.textContent = 'Failed';
+                                        setTimeout(() => {
+                                            confirmBtn.disabled = false;
+                                            confirmBtn.textContent = 'Update Now';
+                                        }, 2000);
+                                    }
+                                };
+
+                                cancelBtn.onclick = () => modal.classList.remove('active');
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Failed to check for desktop updates:', e);
+                    }
+                }, 3000);
+            });
         } catch (err) {
             console.error('Failed to load desktop module:', err);
         }
@@ -421,7 +493,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ui = new UIRenderer(api, player);
     window.monochromeUi = ui;
     const scrobbler = new MultiScrobbler();
+    window.monochromeScrobbler = scrobbler;
     const lyricsManager = new LyricsManager(api);
+    ui.lyricsManager = lyricsManager;
 
     // Check browser support for local files
     const selectLocalBtn = document.getElementById('select-local-folder-btn');
@@ -560,7 +634,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    document.getElementById('fullscreen-cover-image')?.addEventListener('click', () => {
+    document.getElementById('fullscreen-cover-overlay')?.addEventListener('click', (e) => {
+        const coverImage = document.getElementById('fullscreen-cover-image');
+        if (!coverImage) return;
+        const isOnCoverImage = e.target.closest('#fullscreen-cover-image') || e.target.id === 'fullscreen-cover-image';
+        if (!isOnCoverImage) return;
+
         const action = fullscreenCoverClickSettings.getAction();
         const overlay = document.getElementById('fullscreen-cover-overlay');
         const playerInstance = window.monochromePlayer;
@@ -1881,20 +1960,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             db.getPlaylist(playlistId).then(async (playlist) => {
                 let trackId = null;
+                let trackType = null;
 
                 // Prefer ID if available (from sorted view)
                 if (btn.dataset.trackId) {
                     trackId = btn.dataset.trackId;
+                    trackType = btn.dataset.type || 'track';
                 } else if (btn.dataset.trackIndex) {
                     // Fallback to index (legacy/unsorted)
                     const index = parseInt(btn.dataset.trackIndex);
                     if (playlist && playlist.tracks[index]) {
                         trackId = playlist.tracks[index].id;
+                        trackType = playlist.tracks[index].type || 'track';
                     }
                 }
 
                 if (trackId) {
-                    const updatedPlaylist = await db.removeTrackFromPlaylist(playlistId, trackId);
+                    const updatedPlaylist = await db.removeTrackFromPlaylist(playlistId, trackId, trackType);
                     syncManager.syncUserPlaylist(updatedPlaylist, 'update');
                     const scrollTop = document.querySelector('.main-content').scrollTop;
                     await ui.renderPlaylistPage(playlistId, 'user');
@@ -2903,8 +2985,6 @@ function showCustomizeShortcutsModal() {
     const shortcutsList = document.getElementById('shortcuts-list');
     let recordingAction = null;
     let recordingTimeout = null;
-
-    const shortcuts = keyboardShortcuts.getShortcuts();
 
     const formatKey = (key) => {
         if (!key) return 'none';

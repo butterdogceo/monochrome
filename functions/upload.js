@@ -1,9 +1,54 @@
-const API_BASE = 'https://temp.imgur.gg/api/upload';
-const COMPLETE_URL = 'https://temp.imgur.gg/api/upload/complete';
-const PING_URL = 'https://temp.imgur.gg/api/ping';
+const API_URL = 'https://catbox.moe/user/api.php';
+const R2_PUBLIC_URL = 'https://cucks.qzz.io';
+
+const R2_ENDPOINT = 'https://faae2f5c0a232c7f3733ef597c55bd69.r2.cloudflarestorage.com';
+const R2_BUCKET = 'monochrome-image-uploads';
+
+async function hmac(key, data) {
+    const cryptoKey = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, data));
+}
+
+async function sha256(data) {
+    return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+}
+
+function buf2hex(buffer) {
+    return Array.from(buffer)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+async function signature(secretKey, dateStamp, region, service, stringToSign) {
+    const kDate = await hmac(new TextEncoder().encode('AWS4' + secretKey), new TextEncoder().encode(dateStamp));
+    const kRegion = await hmac(kDate, new TextEncoder().encode(region));
+    const kService = await hmac(kRegion, new TextEncoder().encode(service));
+    const kSigning = await hmac(kService, new TextEncoder().encode('aws4_request'));
+    const sig = await hmac(kSigning, new TextEncoder().encode(stringToSign));
+    return buf2hex(sig);
+}
+
+async function createSignature(method, path, headers, payloadHash, accessKeyId, secretAccessKey, amzDate, dateStamp) {
+    const region = 'auto';
+    const service = 's3';
+
+    const signedHeaders = Object.keys(headers).sort().join(';');
+    const canonicalHeaders =
+        Object.entries(headers)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([k, v]) => `${k.toLowerCase()}:${v}`)
+            .join('\n') + '\n';
+
+    const canonicalRequest = `${method}\n${path}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${credentialScope}\n${buf2hex(await sha256(new TextEncoder().encode(canonicalRequest)))}`;
+
+    const sig = await signature(secretAccessKey, dateStamp, region, service, stringToSign);
+    return `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
+}
 
 export async function onRequest(context) {
-    const { request } = context;
+    const { request, env } = context;
 
     if (request.method === 'OPTIONS') {
         return new Response(null, { status: 204, headers: corsHeaders() });
@@ -13,15 +58,13 @@ export async function onRequest(context) {
         return jsonError('Method not allowed', 405);
     }
 
+    const useR2 = env.R2_ENABLED === 'true';
+
     try {
         const contentType = request.headers.get('content-type') || '';
         let file;
         let fileName;
         let fileType;
-
-        /* ========================= */
-        /*        GET FILE           */
-        /* ========================= */
 
         if (contentType.includes('application/json')) {
             const body = await request.json();
@@ -38,8 +81,8 @@ export async function onRequest(context) {
             const uploaded = form.get('file');
             if (!uploaded) return jsonError('No file provided', 400);
 
-            if (uploaded.size > 100 * 1024 * 1024) {
-                return jsonError('File exceeds 100MB', 400);
+            if (uploaded.size > 10 * 1024 * 1024) {
+                return jsonError('File exceeds 10MB', 400);
             }
 
             file = await uploaded.arrayBuffer();
@@ -47,174 +90,87 @@ export async function onRequest(context) {
             fileType = uploaded.type || 'application/octet-stream';
         }
 
-        /* ========================= */
-        /*        GET SESSION        */
-        /* ========================= */
+        let url;
 
-        const ping = await fetch(PING_URL, {
-            method: 'GET',
-            headers: userAgentHeaders(),
-        });
+        if (useR2) {
+            try {
+                const key = `${Date.now()}-${fileName}`;
+                const now = new Date();
+                const amzDate =
+                    now
+                        .toISOString()
+                        .replace(/[:-]|\.\d{3}/g, '')
+                        .slice(0, 15) + 'Z';
+                const dateStamp = now
+                    .toISOString()
+                    .replace(/[:-]|\.\d{3}/g, '')
+                    .slice(0, 8);
+                const payloadHash = buf2hex(await sha256(file));
 
-        const setCookie = ping.headers.get('set-cookie') || '';
-        const sessionCookie = setCookie.split(';').find((c) => c.trim().startsWith('_s=')) || '';
+                const host = new URL(R2_ENDPOINT).host;
+                const headers = {
+                    'Content-Type': fileType,
+                    'Content-Length': file.byteLength,
+                    'x-amz-date': amzDate,
+                    'x-amz-content-sha256': payloadHash,
+                    Host: host,
+                };
 
-        /* ========================= */
-        /*       GET METADATA        */
-        /* ========================= */
+                const auth = await createSignature(
+                    'PUT',
+                    `/${R2_BUCKET}/${key}`,
+                    headers,
+                    payloadHash,
+                    env.R2_ACCESS_KEY_ID,
+                    env.R2_SECRET_ACCESS_KEY,
+                    amzDate,
+                    dateStamp
+                );
+                headers['Authorization'] = auth;
 
-        const metadataResp = await fetch(API_BASE, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Cookie: sessionCookie,
-                ...userAgentHeaders(),
-            },
-            body: JSON.stringify({
-                files: [
-                    {
-                        fileName,
-                        fileType,
-                        fileSize: file.byteLength,
-                    },
-                ],
-            }),
-        });
+                const res = await fetch(`${R2_ENDPOINT}/${R2_BUCKET}/${key}`, {
+                    method: 'PUT',
+                    headers,
+                    body: new Uint8Array(file),
+                });
 
-        const metadataText = await metadataResp.text();
+                if (!res.ok) {
+                    const err = await res.text();
+                    throw new Error(`R2 error: ${res.status} - ${err}`);
+                }
 
-        if (!metadataResp.ok) {
-            throw new Error(`Metadata failed: ${metadataText}`);
-        }
-
-        const metadata = JSON.parse(metadataText);
-        const fileInfo = metadata.files?.[0];
-
-        if (!fileInfo || !fileInfo.success) {
-            throw new Error('Invalid metadata response');
-        }
-
-        /* ========================= */
-        /*      HANDLE UPLOAD        */
-        /* ========================= */
-
-        let result;
-
-        if (fileInfo.isMultipart) {
-            result = await handleMultipart(fileInfo, file, sessionCookie);
+                url = `${R2_PUBLIC_URL}/${key}`;
+            } catch (r2Err) {
+                console.error('R2 upload error:', r2Err);
+                return jsonError(`R2 upload failed: ${r2Err.message}`, 500);
+            }
         } else {
-            result = await handleSingle(fileInfo.uploadUrl, file, fileType);
-        }
+            const formData = new FormData();
+            formData.append('reqtype', 'fileupload');
+            formData.append('fileToUpload', new Blob([file], { type: fileType }), fileName);
 
-        const publicUrl = `https://i.imgur.gg/${fileInfo.fileId}-${fileInfo.fileName}`;
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                body: formData,
+            });
+
+            const responseText = await response.text();
+
+            if (!response.ok) {
+                throw new Error(`Upload failed: ${responseText}`);
+            }
+
+            url = responseText.trim();
+        }
 
         return jsonResponse({
             success: true,
-            url: publicUrl,
-            fileId: fileInfo.fileId,
-            fileName: fileInfo.fileName,
+            url: url,
         });
     } catch (err) {
         return jsonError(err.message, 500);
     }
 }
-
-/* ===================================================== */
-/* ================= SINGLE UPLOAD ===================== */
-/* ===================================================== */
-
-async function handleSingle(uploadUrl, fileBuffer, fileType) {
-    if (!uploadUrl) throw new Error('Missing uploadUrl');
-
-    const res = await fetch(uploadUrl, {
-        method: 'PUT',
-        body: fileBuffer,
-        headers: {
-            'Content-Type': fileType,
-        },
-    });
-
-    if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`Single upload failed: ${txt}`);
-    }
-
-    return true;
-}
-
-/* ===================================================== */
-/* ================= MULTIPART UPLOAD =================== */
-/* ===================================================== */
-
-async function handleMultipart(fileInfo, fileBuffer, sessionCookie) {
-    const { partUrls, partSize, uploadId, fileId } = fileInfo;
-
-    if (!partUrls || !uploadId) {
-        throw new Error('Invalid multipart metadata');
-    }
-
-    const parts = [];
-
-    for (let i = 0; i < partUrls.length; i++) {
-        const start = i * partSize;
-        const end = start + partSize;
-        const chunk = fileBuffer.slice(start, end);
-
-        const uploadRes = await fetch(partUrls[i].url, {
-            method: 'PUT',
-            body: chunk,
-        });
-
-        if (!uploadRes.ok) {
-            const txt = await uploadRes.text();
-            throw new Error(`Multipart part ${i + 1} failed: ${txt}`);
-        }
-
-        let etag = uploadRes.headers.get('etag') || '';
-        etag = etag.replace(/"/g, '');
-
-        parts.push({
-            PartNumber: i + 1,
-            ETag: `"${etag}"`,
-        });
-    }
-
-    /* ========================= */
-    /*      FINALIZE UPLOAD      */
-    /* ========================= */
-
-    const completeResp = await fetch(COMPLETE_URL, {
-        method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            Cookie: sessionCookie,
-            ...userAgentHeaders(),
-        },
-        body: JSON.stringify({
-            fileId,
-            uploadId,
-            parts,
-        }),
-    });
-
-    const completeText = await completeResp.text();
-
-    if (!completeResp.ok) {
-        throw new Error(`Multipart complete failed: ${completeText}`);
-    }
-
-    const completeData = JSON.parse(completeText);
-
-    if (!completeData.success) {
-        throw new Error('Multipart finalize returned failure');
-    }
-
-    return completeData;
-}
-
-/* ===================================================== */
-/* ================= UTILITIES ========================= */
-/* ===================================================== */
 
 function jsonResponse(obj, status = 200) {
     return new Response(JSON.stringify(obj), {
@@ -235,11 +191,5 @@ function corsHeaders() {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'POST, OPTIONS',
         'Access-Control-Allow-Headers': '*',
-    };
-}
-
-function userAgentHeaders() {
-    return {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
     };
 }
