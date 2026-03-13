@@ -44,7 +44,7 @@ export const apiSettings = {
 
             for (const url of urls) {
                 try {
-                    const response = await fetch(url);
+                    const response = await fetch(`https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(url)}`);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     data = await response.json();
                     break; // Success, exit loop
@@ -539,7 +539,13 @@ export const downloadQualitySettings = {
     STORAGE_KEY: 'download-quality',
     getQuality() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) || 'HIGH';
+            const stored = localStorage.getItem(this.STORAGE_KEY) || 'HIGH';
+            // Migrate legacy value to renamed format
+            if (stored === 'MP3_320') {
+                this.setQuality('FFMPEG_MP3_320');
+                return 'FFMPEG_MP3_320';
+            }
+            return stored;
         } catch {
             return 'HIGH';
         }
@@ -553,7 +559,8 @@ export const losslessContainerSettings = {
     STORAGE_KEY: 'lossless-container',
     getContainer() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) || 'flac';
+            const stored = localStorage.getItem(this.STORAGE_KEY) || 'flac';
+            return stored;
         } catch {
             return 'flac';
         }
@@ -579,22 +586,6 @@ export const coverArtSizeSettings = {
 
 export const waveformSettings = {
     STORAGE_KEY: 'waveform-seekbar-enabled',
-
-    isEnabled() {
-        try {
-            return localStorage.getItem(this.STORAGE_KEY) === 'true';
-        } catch {
-            return false;
-        }
-    },
-
-    setEnabled(enabled) {
-        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
-    },
-};
-
-export const smoothScrollingSettings = {
-    STORAGE_KEY: 'smooth-scrolling-enabled',
 
     isEnabled() {
         try {
@@ -644,18 +635,54 @@ export const trackDateSettings = {
 };
 
 export const bulkDownloadSettings = {
-    STORAGE_KEY: 'force-individual-downloads',
+    METHOD_KEY: 'bulk-download-method',
+    FORCE_ZIP_BLOB_KEY: 'bulk-download-force-zip-blob',
+    LEGACY_INDIVIDUAL_KEY: 'force-individual-downloads',
+    VALID_METHODS: ['zip', 'folder', 'individual'],
 
-    shouldForceIndividual() {
+    /** Returns the selected bulk download method: 'zip' | 'folder' | 'individual' */
+    getMethod() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) === 'true';
+            const stored = localStorage.getItem(this.METHOD_KEY);
+            if (stored && this.VALID_METHODS.includes(stored)) {
+                return stored;
+            }
+            const legacy = localStorage.getItem(this.LEGACY_INDIVIDUAL_KEY);
+            if (legacy === 'true') {
+                localStorage.setItem(this.METHOD_KEY, 'individual');
+                localStorage.removeItem(this.LEGACY_INDIVIDUAL_KEY);
+                return 'individual';
+            }
+            return 'zip';
+        } catch {
+            return 'zip';
+        }
+    },
+
+    setMethod(method) {
+        localStorage.setItem(this.METHOD_KEY, method);
+    },
+
+    /** When using ZIP mode, force in-memory blob download instead of streaming to disk */
+    shouldForceZipBlob() {
+        try {
+            return localStorage.getItem(this.FORCE_ZIP_BLOB_KEY) === 'true';
         } catch {
             return false;
         }
     },
 
+    setForceZipBlob(enabled) {
+        localStorage.setItem(this.FORCE_ZIP_BLOB_KEY, enabled ? 'true' : 'false');
+    },
+
+    // Kept for backward compatibility
+    shouldForceIndividual() {
+        return this.getMethod() === 'individual';
+    },
+
     setForceIndividual(enabled) {
-        localStorage.setItem(this.STORAGE_KEY, enabled ? 'true' : 'false');
+        this.setMethod(enabled ? 'individual' : 'zip');
     },
 };
 
@@ -667,6 +694,7 @@ export const playlistSettings = {
     JSON_KEY: 'playlist-generate-json',
     RELATIVE_PATHS_KEY: 'playlist-relative-paths',
     SEPARATE_DISCS_KEY: 'playlist-separate-discs-in-zip',
+    INCLUDE_COVER_KEY: 'playlist-include-cover',
 
     shouldGenerateM3U() {
         try {
@@ -753,6 +781,19 @@ export const playlistSettings = {
 
     setSeparateDiscsInZip(enabled) {
         localStorage.setItem(this.SEPARATE_DISCS_KEY, enabled ? 'true' : 'false');
+    },
+
+    shouldIncludeCover() {
+        try {
+            const val = localStorage.getItem(this.INCLUDE_COVER_KEY);
+            return val === null ? true : val === 'true';
+        } catch {
+            return true;
+        }
+    },
+
+    setIncludeCover(enabled) {
+        localStorage.setItem(this.INCLUDE_COVER_KEY, enabled ? 'true' : 'false');
     },
 };
 
@@ -1660,6 +1701,22 @@ export const homePageSettings = {
 
     setShuffleEditorsPicks(enabled) {
         localStorage.setItem(this.SHUFFLE_EDITORS_PICKS_KEY, enabled ? 'true' : 'false');
+    },
+};
+
+export const radioSettings = {
+    ENABLED_KEY: 'radio-enabled',
+
+    isEnabled() {
+        try {
+            return localStorage.getItem(this.ENABLED_KEY) === 'true';
+        } catch {
+            return false;
+        }
+    },
+
+    setEnabled(enabled) {
+        localStorage.setItem(this.ENABLED_KEY, enabled ? 'true' : 'false');
     },
 };
 

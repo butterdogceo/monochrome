@@ -21,10 +21,10 @@ import { initializeUIInteractions } from './ui-interactions.js';
 import { debounce, SVG_PLAY, getShareUrl } from './utils.js';
 import { sidePanelManager } from './side-panel.js';
 import { db } from './db.js';
+import { showNotification } from './downloads.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { authManager } from './accounts/auth.js';
 import { registerSW } from 'virtual:pwa-register';
-import './smooth-scrolling.js';
 import { openEditProfile } from './profile.js';
 import { ThemeStore } from './themeStore.js';
 import './commandPalette.js';
@@ -97,6 +97,8 @@ if (typeof window !== 'undefined') {
 let settingsModule = null;
 let downloadsModule = null;
 let metadataModule = null;
+
+export const managers = {};
 
 async function loadSettingsModule() {
     if (!settingsModule) {
@@ -192,7 +194,7 @@ function initializeCasting(audioPlayer, castBtn) {
     }
 }
 
-function initializeKeyboardShortcuts(player, audioPlayer) {
+function initializeKeyboardShortcuts(player, _audioPlayer) {
     const keyActionMap = {
         playPause: () => {
             trackKeyboardShortcut('Space');
@@ -200,11 +202,11 @@ function initializeKeyboardShortcuts(player, audioPlayer) {
         },
         seekForward: () => {
             trackKeyboardShortcut('Right');
-            audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 10);
+            player.seekForward(10);
         },
         seekBackward: () => {
             trackKeyboardShortcut('Left');
-            audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 10);
+            player.seekBackward(10);
         },
         nextTrack: () => {
             trackKeyboardShortcut('Shift+Right');
@@ -224,7 +226,8 @@ function initializeKeyboardShortcuts(player, audioPlayer) {
         },
         mute: () => {
             trackKeyboardShortcut('M');
-            audioPlayer.muted = !audioPlayer.muted;
+            const el = player.activeElement;
+            el.muted = !el.muted;
         },
         shuffle: () => {
             trackKeyboardShortcut('S');
@@ -250,7 +253,7 @@ function initializeKeyboardShortcuts(player, audioPlayer) {
             trackKeyboardShortcut('Escape');
             document.getElementById('search-input')?.blur();
             sidePanelManager.close();
-            clearLyricsPanelSync(audioPlayer, sidePanelManager.panel);
+            clearLyricsPanelSync(player.activeElement, sidePanelManager.panel);
         },
         visualizerNext: () => {
             trackKeyboardShortcut('VisualizerNext');
@@ -424,8 +427,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             events.on('mediaPrevious', () => player.playPrev());
             events.on('mediaPlayPause', () => player.handlePlayPause());
             events.on('mediaStop', () => {
-                player.audio.pause();
-                player.audio.currentTime = 0;
+                const el = player.activeElement;
+                el.pause();
+                el.currentTime = 0;
             });
             console.log('Media keys initialized via bridge');
         });
@@ -496,6 +500,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.monochromeScrobbler = scrobbler;
     const lyricsManager = new LyricsManager(api);
     ui.lyricsManager = lyricsManager;
+    managers.lyricsManager = lyricsManager;
 
     // Check browser support for local files
     const selectLocalBtn = document.getElementById('select-local-folder-btn');
@@ -595,9 +600,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (isActive) {
                 sidePanelManager.close();
-                clearLyricsPanelSync(audioPlayer, sidePanelManager.panel);
+                clearLyricsPanelSync(player.activeElement, sidePanelManager.panel);
             } else {
-                openLyricsPanel(player.currentTrack, audioPlayer, lyricsManager);
+                openLyricsPanel(player.currentTrack, player.activeElement, lyricsManager);
             }
         } else if (mode === 'cover') {
             const overlay = document.getElementById('fullscreen-cover-overlay');
@@ -609,7 +614,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             } else {
                 const nextTrack = player.getNextTrack();
-                ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, audioPlayer);
+                ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, player.activeElement);
             }
         } else {
             // Default to 'album' mode - navigate to album
@@ -897,9 +902,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (isActive) {
             sidePanelManager.close();
-            clearLyricsPanelSync(audioPlayer, sidePanelManager.panel);
+            clearLyricsPanelSync(player.activeElement, sidePanelManager.panel);
         } else {
-            openLyricsPanel(player.currentTrack, audioPlayer, lyricsManager);
+            openLyricsPanel(player.currentTrack, player.activeElement, lyricsManager);
         }
     });
 
@@ -927,14 +932,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Update lyrics panel if it's open
         if (sidePanelManager.isActive('lyrics')) {
             // Re-open forces update/refresh of content and sync
-            openLyricsPanel(player.currentTrack, audioPlayer, lyricsManager, true);
+            openLyricsPanel(player.currentTrack, player.activeElement, lyricsManager, true);
         }
 
         // Update Fullscreen if it's open
         const fullscreenOverlay = document.getElementById('fullscreen-cover-overlay');
         if (fullscreenOverlay && getComputedStyle(fullscreenOverlay).display !== 'none') {
             const nextTrack = player.getNextTrack();
-            ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, audioPlayer);
+            ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, player.activeElement);
         }
 
         // DEV: Auto-open fullscreen mode if ?fullscreen=1 in URL
@@ -945,7 +950,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             getComputedStyle(fullscreenOverlay).display === 'none'
         ) {
             const nextTrack = player.getNextTrack();
-            ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, audioPlayer);
+            ui.showFullscreenCover(player.currentTrack, nextTrack, lyricsManager, player.activeElement);
         }
     });
 
@@ -1237,6 +1242,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ui.renderLibraryPage();
                 document.getElementById('folder-modal').classList.remove('active');
                 trackCloseModal('Create Folder');
+            } else {
+                showNotification('Please enter a folder name.');
             }
         }
 
@@ -1342,7 +1349,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         const url = ytmUrlInput.value.trim();
                         const playlistId = url.split('list=')[1]?.split('&')[0];
 
-                        const workerUrl = `https://ytmimport.samidy.workers.dev?playlistId=${playlistId}`;
+                        const workerUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://ytmimport.samidy.workers.dev?playlistId=${playlistId}`)}`;
 
                         if (!playlistId) {
                             alert("Invalid URL. Make sure it has 'list=' in it.");
@@ -1413,7 +1420,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (err) {
@@ -1498,7 +1505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (error) {
@@ -1551,10 +1558,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                                 importOptions
                             );
 
-                            const hasMultipleTypes =
-                                result.tracks.length > 0 && (result.albums.length > 0 || result.artists.length > 0);
+                            const isLibraryImport =
+                                result.albums.length > 0 ||
+                                result.artists.length > 0 ||
+                                Object.keys(result.playlists).length > 1;
 
-                            if (hasMultipleTypes) {
+                            if (isLibraryImport) {
                                 currentTrackElement.textContent = 'Adding to library...';
 
                                 const importResults = await importToLibrary(result, db, (progress) => {
@@ -1602,7 +1611,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (error) {
@@ -1661,7 +1670,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (error) {
@@ -1720,7 +1729,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (error) {
@@ -1779,7 +1788,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
                             if (missingTracks.length > 0) {
                                 setTimeout(() => {
-                                    showMissingTracksNotification(missingTracks);
+                                    showMissingTracksNotification(missingTracks, name || 'Untitled');
                                 }, 500);
                             }
                         } catch (error) {
@@ -1814,6 +1823,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         trackCloseModal('Create Playlist');
                     });
                 }
+            } else {
+                showNotification('Please enter a playlist name.');
             }
         }
 
@@ -2849,10 +2860,11 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function showMissingTracksNotification(missingTracks) {
+function showMissingTracksNotification(missingTracks, playlistName) {
     const modal = document.getElementById('missing-tracks-modal');
     const listUl = document.getElementById('missing-tracks-list-ul');
     const copyBtn = document.getElementById('copy-missing-tracks-btn');
+    const exportCSVBtn = document.getElementById('export-missing-tracks-csv-btn');
 
     listUl.innerHTML = missingTracks
         .map((track) => {
@@ -2867,19 +2879,54 @@ function showMissingTracksNotification(missingTracks) {
         copyBtn.parentNode.replaceChild(newCopyBtn, copyBtn);
 
         newCopyBtn.addEventListener('click', () => {
-            const textToCopy = missingTracks
-                .map((track) => {
-                    return typeof track === 'string'
-                        ? track
-                        : `${track.artist ? track.artist + ' - ' : ''}${track.title}`;
-                })
-                .join('\n');
+            const header = `Missing songs from ${playlistName} import:\n\n`;
+            const textToCopy =
+                header +
+                missingTracks
+                    .map((track) => {
+                        return typeof track === 'string'
+                            ? track
+                            : `${track.artist ? track.artist + ' - ' : ''}${track.title}`;
+                    })
+                    .join('\n');
 
             navigator.clipboard.writeText(textToCopy).then(() => {
                 const originalText = newCopyBtn.textContent;
                 newCopyBtn.textContent = 'Copied!';
                 setTimeout(() => (newCopyBtn.textContent = originalText), 2000);
             });
+        });
+    }
+
+    if (exportCSVBtn) {
+        const newExportBtn = exportCSVBtn.cloneNode(true);
+        exportCSVBtn.parentNode.replaceChild(newExportBtn, exportCSVBtn);
+
+        newExportBtn.addEventListener('click', () => {
+            const headers = ['Artist', 'Title', 'Album'];
+            let csvContent = headers.join(',') + '\n';
+
+            missingTracks.forEach((track) => {
+                if (typeof track === 'string') {
+                    csvContent += `"${track.replace(/"/g, '""')}","",""\n`;
+                } else {
+                    const artist = (track.artist || '').replace(/"/g, '""');
+                    const title = (track.title || '').replace(/"/g, '""');
+                    const album = (track.album || '').replace(/"/g, '""');
+                    csvContent += `"${artist}","${title}","${album}"\n`;
+                }
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.setAttribute('href', url);
+            const fileName = `${playlistName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_missing_tracks.csv`;
+            link.setAttribute('download', fileName);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
         });
     }
 

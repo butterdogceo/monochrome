@@ -13,7 +13,6 @@ Thank you for your interest in contributing to Monochrome! This guide will help 
 - [Contributing Workflow](#contributing-workflow)
 - [Commit Message Guidelines](#commit-message-guidelines)
 - [Deployment](#deployment)
-- [Questions?](#questions)
 
 ---
 
@@ -21,19 +20,21 @@ Thank you for your interest in contributing to Monochrome! This guide will help 
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (Version 20+ or 22+ recommended)
+- [Node.js](https://nodejs.org/) (Version 22+ recommended)
 - [Bun](https://bun.sh/) (preferred) or [npm](https://www.npmjs.com/)
 
 ### Quick Start
 
-1. **Fork and clone the repository:**
+1. Fork the Repository
+
+2. clone the repository:
 
     ```bash
     git clone https://github.com/YOUR_USERNAME/monochrome.git
     cd monochrome
     ```
 
-2. **Install dependencies:**
+3. Install dependencies:
 
     ```bash
     bun install
@@ -41,7 +42,7 @@ Thank you for your interest in contributing to Monochrome! This guide will help 
     npm install
     ```
 
-3. **Start the development server:**
+4. Start the development server:
 
     ```bash
     bun run dev
@@ -49,7 +50,7 @@ Thank you for your interest in contributing to Monochrome! This guide will help 
     npm run dev
     ```
 
-4. **Open your browser:**
+5. Open your browser:
    Navigate to `http://localhost:5173/`
 
 ---
@@ -99,9 +100,6 @@ bun run lint:css
 ```
 monochrome/
 ├── 📁 js/                    # Application source code
-│   ├── components/          # UI components
-│   ├── utils/               # Utility functions
-│   ├── api/                 # API integration
 │   └── ...
 ├── 📁 public/               # Static assets
 │   ├── assets/             # Images, icons, fonts
@@ -118,12 +116,12 @@ monochrome/
 - **`/js`** - All JavaScript source code
     - Keep modules focused and single-purpose
     - Use ES6+ features
-    - Add JSDoc comments for complex functions
+    - Keep the code easy to work with/maintain
 
 - **`/public`** - Static assets copied directly to build
     - Images should be optimized before adding
     - Keep file sizes reasonable
-    - Use appropriate formats (WebP where possible)
+    - Use appropriate formats (PNG where possible)
 
 ---
 
@@ -206,7 +204,7 @@ Follow our [commit message guidelines](#commit-message-guidelines).
 
 ```bash
 git add .
-git commit -m "feat(player): add keyboard shortcut for loop toggle"
+git commit -m "feat(player): add keyboard shortcut for loop toggle" # example commit message
 ```
 
 ### 5. Push and Create a Pull Request
@@ -308,7 +306,7 @@ Deployment is fully automated via **Cloudflare Pages**.
 
 1. Push changes to the `main` branch
 2. Cloudflare automatically builds and deploys
-3. Changes are live within minutes
+3. Changes are live a minute
 
 ### Configuration Notes
 

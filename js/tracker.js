@@ -30,7 +30,7 @@ function cleanSongTitle(title) {
 
 async function loadArtistsPopularity() {
     try {
-        const response = await fetch('https://trends.artistgrid.cx');
+        const response = await fetch(`https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa('https://trends.artistgrid.cx')}`);
         if (!response.ok) return;
         const data = await response.json();
         if (data.results) {
@@ -47,7 +47,7 @@ async function loadArtistsPopularity() {
 
 async function loadArtistsData() {
     try {
-        const response = await fetch('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://assets.artistgrid.cx/artists.ndjson'));
+        const response = await fetch(`https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa('https://assets.artistgrid.cx/artists.ndjson'))}`);
         if (!response.ok) throw new Error('Network response was not ok');
         const text = await response.text();
         artistsData = text
@@ -115,7 +115,7 @@ async function fetchTrackerData(sheetId) {
     let lastError = null;
     for (const baseUrl of endpoints) {
         try {
-            const response = await fetch(`${baseUrl}${sheetId}`);
+            const response = await fetch(`https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`${baseUrl}${sheetId}`)}`);
             if (!response.ok) {
                 lastError = new Error(`HTTP ${response.status}`);
                 continue;

@@ -108,6 +108,17 @@ export const detectAudioFormat = (view, mimeType = '') => {
         return 'flac';
     }
 
+    // Check for OGG signature: "OggS" (0x4F 0x67 0x67 0x53)
+    if (
+        view.byteLength >= 4 &&
+        view.getUint8(0) === 0x4f && // O
+        view.getUint8(1) === 0x67 && // g
+        view.getUint8(2) === 0x67 && // g
+        view.getUint8(3) === 0x53 // S
+    ) {
+        return 'ogg';
+    }
+
     // Check for MP4/M4A signature: "ftyp" at offset 4
     if (
         view.byteLength >= 8 &&
@@ -153,6 +164,7 @@ export const detectAudioFormat = (view, mimeType = '') => {
 
     // Fallback to MIME type
     if (mimeType === 'audio/flac') return 'flac';
+    if (mimeType === 'audio/ogg') return 'ogg';
     if (mimeType === 'audio/mp4' || mimeType === 'audio/x-m4a') return 'mp4';
     if (mimeType === 'audio/mp3' || mimeType === 'audio/mpeg') return 'mp3';
 
@@ -177,8 +189,10 @@ export const getExtensionFromBlob = async (blob) => {
     if (format) return format;
 
     if (blob.type.includes('video')) return 'mp4';
-    if (blob.type === 'audio/mp4' || blob.type === 'audio/x-m4a') return 'm4a';
-    if (blob.type === 'audio/mpeg' || blob.type === 'audio/mp3') return 'mp3';
+    if (blob.type === 'audio/flac') return 'flac';
+    if (blob.type === 'audio/ogg') return 'ogg';
+    if (blob.type === 'audio/mp4' || blob.type === 'audio/x-m4a') return 'mp4';
+    if (blob.type === 'audio/mp3' || blob.type === 'audio/mpeg') return 'mp3';
 
     return 'flac';
 };
@@ -188,8 +202,6 @@ export const getExtensionForQuality = (quality) => {
         case 'LOW':
         case 'HIGH':
             return 'm4a';
-        case 'MP3_320':
-            return 'mp3';
         default:
             return 'flac';
     }
@@ -202,6 +214,7 @@ export const buildTrackFilename = (track, quality, extension = null) => {
     const artistName = track.artist?.name || track.artists?.[0]?.name || 'Unknown Artist';
 
     const data = {
+        discNumber: getTrackDiscNumber(track) || 1,
         trackNumber: track.trackNumber,
         artist: artistName,
         title: getTrackTitle(track),
@@ -360,6 +373,7 @@ export const getTrackArtistsHTML = (track = {}, { fallback = 'Unknown Artist' } 
 
 export const formatTemplate = (template, data) => {
     let result = template;
+    result = result.replace(/\{discNumber\}/g, String(Number(data.discNumber || 1)));
     result = result.replace(/\{trackNumber\}/g, data.trackNumber ? String(data.trackNumber).padStart(2, '0') : '00');
     result = result.replace(/\{artist\}/g, sanitizeForFilename(data.artist || 'Unknown Artist'));
     result = result.replace(/\{title\}/g, sanitizeForFilename(data.title || 'Unknown Title'));
@@ -421,6 +435,9 @@ function resizeImageBlob(blob, size) {
 
 /**
  * Fetches and caches cover art as a Blob
+ * @param {Object} api - API instance with getCoverUrl method
+ * @param {string} coverId - ID of the cover art to fetch
+ * @returns {Promise<Blob|null>} - Cover art blob or null if not available
  */
 export async function getCoverBlob(api, coverId) {
     if (!coverId) return null;
@@ -553,3 +570,116 @@ export const getShareUrl = (path) => {
     const safePath = path.startsWith('/') ? path : `/${path}`;
     return `${baseUrl}${safePath}`;
 };
+
+/**
+ * Builds a full artist string by combining the track's listed artists
+ * with any featured artists parsed from the title (feat./with).
+ */
+export function getFullArtistString(track) {
+    const knownArtists =
+        Array.isArray(track.artists) && track.artists.length > 0
+            ? track.artists.map((a) => (typeof a === 'string' ? a : a.name) || '').filter(Boolean)
+            : track.artist?.name
+              ? [track.artist.name]
+              : [];
+
+    // Parse featured artists from title, e.g. "Song (feat. A, B & C)" or "(with X & Y)"
+    // Note: splitting on '&' may incorrectly fragment compound artist names like "Simon & Garfunkel".
+    const featPattern = /\(\s*(?:feat\.?|ft\.?|with)\s+(.+?)\s*\)/gi;
+    const allFeatArtists = [...(track.title?.matchAll(featPattern) ?? [])].flatMap((m) =>
+        m[1]
+            .split(/\s*[,&]\s*/)
+            .map((s) => s.trim())
+            .filter(Boolean)
+    );
+    if (allFeatArtists.length > 0) {
+        const knownLower = new Set(knownArtists.map((n) => n.toLowerCase()));
+        for (const feat of allFeatArtists) {
+            if (!knownLower.has(feat.toLowerCase())) {
+                knownArtists.push(feat);
+                knownLower.add(feat.toLowerCase());
+            }
+        }
+    }
+
+    return knownArtists.join('; ') || null;
+}
+
+export function fetchBlob(url) {
+    return fetch(url).then((d) => d.blob());
+}
+
+export async function fetchBlobURL(url) {
+    return await URL.createObjectURL(await fetchBlob(url));
+}
+
+export function getMimeType(data) {
+    if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg';
+    if (data.length >= 8 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47)
+        return 'image/png';
+    return 'image/jpeg';
+}
+
+/**
+ * Retrieves the cover ID or image URL for a track
+ * @param {Object} track - The track object
+ * @param {Object} [track.album] - The album object associated with the track
+ * @param {string} [track.album.cover] - The album cover ID or URL
+ * @param {string} [track.album.coverId] - The album cover ID
+ * @param {string} [track.album.image] - The album image URL
+ * @param {string} [track.cover] - The track cover ID or URL
+ * @param {string} [track.coverId] - The track cover ID
+ * @param {string} [track.image] - The track image URL
+ * @returns {string|null} The cover ID or image URL, or null if none is available
+ */
+export function getTrackCoverId(track) {
+    return (
+        track.album?.cover ||
+        track.cover ||
+        track.image ||
+        track.album?.coverId ||
+        track.coverId ||
+        track.album?.image ||
+        null
+    );
+}
+
+/**
+ * Converts a value to a positive integer.
+ * @param {*} value - The value to convert to a positive integer.
+ * @returns {number|null} The parsed positive integer, or null if the value is not a finite positive number.
+ */
+export function toPositiveInt(value) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * Extracts the disc number from a track object by checking multiple possible property names.
+ * @param {Object} track - The track object to extract the disc number from.
+ * @returns {number|null} The disc number as a positive integer, or null if no valid disc number is found.
+ */
+export function getTrackDiscNumber(track) {
+    const candidates = [
+        track?.volumeNumber,
+        track?.discNumber,
+        track?.mediaNumber,
+        track?.media_number,
+        track?.volume,
+        track?.disc,
+        track?.volume?.number,
+        track?.disc?.number,
+        track?.media?.number,
+        track?.disc,
+        track?.disc_no,
+        track?.discNo,
+        track?.disc_number,
+        track?.mediaMetadata?.discNumber,
+    ];
+
+    for (const candidate of candidates) {
+        const parsed = toPositiveInt(candidate);
+        if (parsed) return parsed;
+    }
+    return null;
+}

@@ -17,13 +17,20 @@ The official Monochrome instance maintained by the core team:
 
 ## Community Instances
 
+### Community Monochrome Instances
+
+These instances are community instances of Monochrome & its WebUI:
+
+| Provider      | URL                                      | Status    |
+| ------------- | ---------------------------------------- | --------- |
+| **Squid.WTF** | [mono.squid.wtf](https://mono.squid.wtf) | Community |
+
 ### UI-Only Instances
 
 These instances provide the tidal-ui web interface, not monochrome:
 
 | Provider            | URL                                            | Status    |
 | ------------------- | ---------------------------------------------- | --------- |
-| **bini (tidal-ui)** | [music.binimum.org](https://music.binimum.org) | Community |
 | **squid.wtf**       | [tidal.squid.wtf](https://tidal.squid.wtf)     | Community |
 | **QQDL**            | [tidal.qqdl.site](https://tidal.qqdl.site/)    | Community |
 
@@ -40,33 +47,18 @@ These are available API endpoints that can be used with Monochrome or other Hi-F
 
 ### Official & Community APIs
 
-| Provider          | URL                                 | Notes                                                      |
-| ----------------- | ----------------------------------- | ---------------------------------------------------------- |
-| **Monochrome**    | `https://monochrome-api.samidy.com` | Official API - [See Note](https://rentry.co/monochromeapi) |
-|                   | `https://api.monochrome.tf`         | Official API                                               |
-|                   | `https://arran.monochrome.tf`       | Official API                                               |
-| **squid.wtf**     | `https://triton.squid.wtf`          | Community hosted                                           |
-| **Lucida (QQDL)** | `https://wolf.qqdl.site`            | Community hosted                                           |
-|                   | `https://maus.qqdl.site`            | Community hosted                                           |
-|                   | `https://vogel.qqdl.site`           | Community hosted                                           |
-|                   | `https://katze.qqdl.site`           | Community hosted                                           |
-|                   | `https://hund.qqdl.site`            | Community hosted                                           |
-| **Spotisaver**    | `https://hifi-one.spotisaver.net`   | Community hosted                                           |
-|                   | `https://hifi-two.spotisaver.net`   | Community hosted                                           |
-| **Kinoplus**      | `https://tidal.kinoplus.online`     | Community hosted                                           |
-| **Binimum**       | `https://tidal-api.binimum.org`     | Community hosted                                           |
-
----
-
-## Instance Health
-
-To check the current status of instances:
-
-1. Visit the instance URL in your browser
-2. Check if the page loads correctly
-3. Try playing a track to verify API connectivity
-
-> **Note:** Community instances may have varying uptime and performance. If one doesn't work, try another.
+| Provider          | URL                                 | Notes            |
+| ----------------- | ----------------------------------- | ---------------- |
+| **Monochrome**    | `https://monochrome-api.samidy.com` | Official API     |
+|                   | `https://api.monochrome.tf`         | Official API     |
+|                   | `https://arran.monochrome.tf`       | Official API     |
+| **squid.wtf**     | `https://triton.squid.wtf`          | Community hosted |
+| **Lucida (QQDL)** | `https://wolf.qqdl.site`            | Community hosted |
+|                   | `https://maus.qqdl.site`            | Community hosted |
+|                   | `https://vogel.qqdl.site`           | Community hosted |
+|                   | `https://katze.qqdl.site`           | Community hosted |
+|                   | `https://hund.qqdl.site`            | Community hosted |
+| **Kinoplus**      | `https://tidal.kinoplus.online`     | Community hosted - [Limited/No-Sub](https://rentry.co/limitedtidalaccs) |
 
 ---
 
@@ -95,6 +87,5 @@ Want to add your instance to this list?
 
 ## Related Resources
 
-- [Self-Hosting Guide](self-hosted-database.md) - Host your own instance
-- [Contributing Guide](CONTRIBUTE.md) - Contribute to the project
-- [Main Repository](https://github.com/SamidyFR/monochrome) - Source code
+- [Contributing Guide](CONTRIBUTING.md) - Contribute to the project
+- [Main Repository](https://github.com/monochrome-music/monochrome) - Source code

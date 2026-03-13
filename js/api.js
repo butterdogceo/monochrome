@@ -5,14 +5,21 @@ import {
     delay,
     isTrackUnavailable,
     getExtensionFromBlob,
+    getTrackTitle,
+    getFullArtistString,
+    getTrackDiscNumber,
+    getMimeType,
 } from './utils.js';
-import { trackDateSettings, losslessContainerSettings } from './storage.js';
+import { trackDateSettings } from './storage.js';
 import { APICache } from './cache.js';
-import { addMetadataToAudio } from './metadata.js';
-import { DashDownloader } from './dash-downloader.js';
+import { addMetadataToAudio, prefetchMetadataObjects } from './metadata.js';
+import { DashDownloader } from './dash-downloader.ts';
 import { HlsDownloader } from './hls-downloader.js';
-import { encodeToMp3, MP3EncodingError } from './mp3-encoder.js';
-import { ffmpeg } from './ffmpeg.js';
+import { MP3EncodingError } from './mp3-encoder.js';
+import { loadFfmpeg, FfmpegError } from './ffmpeg.js';
+import { triggerDownload, applyAudioPostProcessing } from './download-utils.ts';
+import { isCustomFormat } from './ffmpegFormats.ts';
+import { DownloadProgress } from './progressEvents.js';
 
 export const DASH_MANIFEST_UNAVAILABLE_CODE = 'DASH_MANIFEST_UNAVAILABLE';
 const TIDAL_V2_TOKEN = 'txNoH4kkV41MfH25';
@@ -345,6 +352,21 @@ export class LosslessAPI {
                     decoded = manifest;
                 }
             } else if (typeof manifest === 'object') {
+                if (manifest.urls && Array.isArray(manifest.urls)) {
+                    const priorityKeywords = ['flac', 'lossless', 'hi-res', 'high'];
+                    const sortedUrls = [...manifest.urls].sort((a, b) => {
+                        const aLow = a.toLowerCase();
+                        const bLow = b.toLowerCase();
+                        const aScore = priorityKeywords.findIndex((k) => aLow.includes(k));
+                        const bScore = priorityKeywords.findIndex((k) => bLow.includes(k));
+
+                        const finalAScore = aScore === -1 ? 999 : aScore;
+                        const finalBScore = bScore === -1 ? 999 : bScore;
+
+                        return finalAScore - finalBScore;
+                    });
+                    return sortedUrls[0];
+                }
                 if (manifest.urls?.[0]) return manifest.urls[0];
                 return null;
             } else {
@@ -359,6 +381,19 @@ export class LosslessAPI {
 
             try {
                 const parsed = JSON.parse(decoded);
+                if (parsed?.urls && Array.isArray(parsed.urls)) {
+                    const priorityKeywords = ['flac', 'lossless', 'hi-res', 'high'];
+                    const sortedUrls = [...parsed.urls].sort((a, b) => {
+                        const aLow = a.toLowerCase();
+                        const bLow = b.toLowerCase();
+                        const aScore = priorityKeywords.findIndex((k) => aLow.includes(k));
+                        const bScore = priorityKeywords.findIndex((k) => bLow.includes(k));
+                        const finalAScore = aScore === -1 ? 999 : aScore;
+                        const finalBScore = bScore === -1 ? 999 : bScore;
+                        return finalAScore - finalBScore;
+                    });
+                    return sortedUrls[0];
+                }
                 if (parsed?.urls?.[0]) {
                     return parsed.urls[0];
                 }
@@ -906,11 +941,11 @@ export class LosslessAPI {
         const trackMap = new Map();
         const videoMap = new Map();
 
-        const isTrack = (v) => v?.id && v.duration && v.album;
+        const isTrack = (v) => v?.id && v.duration;
         const isAlbum = (v) => v?.id && 'numberOfTracks' in v;
         const isVideo = (v) => v?.id && v.type === 'VIDEO';
 
-        const scan = (value, visited = new Set()) => {
+        const scan = (value, visited) => {
             if (!value || typeof value !== 'object' || visited.has(value)) return;
             visited.add(value);
 
@@ -921,13 +956,17 @@ export class LosslessAPI {
 
             const item = value.item || value;
             if (isAlbum(item)) albumMap.set(item.id, this.prepareAlbum(item));
-            if (isTrack(item)) trackMap.set(item.id, this.prepareTrack(item));
+            if (isTrack(item) && !isAlbum(item) && !isVideo(item)) {
+                trackMap.set(item.id, this.prepareTrack(item));
+            }
             if (isVideo(item)) videoMap.set(item.id, this.prepareVideo(item));
 
             Object.values(value).forEach((nested) => scan(nested, visited));
         };
 
-        entries.forEach((entry) => scan(entry));
+        const visited = new Set();
+        entries.forEach((entry) => scan(entry, visited));
+        scan(primaryData, visited);
 
         if (!options.lightweight) {
             try {
@@ -1108,25 +1147,27 @@ export class LosslessAPI {
         const recommendedTracks = [];
         const seenTrackIds = new Set(tracks.map((t) => t.id));
 
-        // Shuffle artists if refreshing to get different results
-        let shuffledArtists = artists;
-        if (options.refresh) {
-            shuffledArtists = [...artists].sort(() => Math.random() - 0.5);
-        }
-
-        const artistsToProcess = shuffledArtists.slice(0, Math.min(5, shuffledArtists.length));
+        const shuffledArtists = [...artists].sort(() => Math.random() - 0.5);
+        const artistsToProcess = shuffledArtists.slice(0, Math.min(15, shuffledArtists.length));
 
         const artistPromises = artistsToProcess.map(async (artist) => {
             try {
-                console.log(`Fetching tracks for artist: ${artist.name} (ID: ${artist.id})`);
                 const artistData = await this.getArtist(artist.id, { lightweight: true, skipCache: options.refresh });
                 if (artistData && artistData.tracks && artistData.tracks.length > 0) {
                     const availableTracks = artistData.tracks.filter((track) => !seenTrackIds.has(track.id));
-                    // Shuffle and pick different tracks when refreshing
-                    const shuffled = options.refresh
-                        ? availableTracks.sort(() => Math.random() - 0.5)
+
+                    const newTracks = options.knownTrackIds
+                        ? availableTracks.filter((t) => !options.knownTrackIds.has(t.id))
                         : availableTracks;
-                    return shuffled.slice(0, 4);
+                    const knownTracks = options.knownTrackIds
+                        ? availableTracks.filter((t) => options.knownTrackIds.has(t.id))
+                        : [];
+
+                    const shuffledNew = [...newTracks].sort(() => Math.random() - 0.5);
+                    const shuffledKnown = [...knownTracks].sort(() => Math.random() - 0.5);
+
+                    const combined = [...shuffledNew, ...shuffledKnown];
+                    return combined.slice(0, 2);
                 } else {
                     console.warn(`No tracks found for artist ${artist.name}`);
                     return [];
@@ -1141,7 +1182,7 @@ export class LosslessAPI {
         results.forEach((tracks) => {
             if (tracks.length > 0) {
                 recommendedTracks.push(...tracks);
-                seenTrackIds.add(...tracks.map((t) => t.id));
+                tracks.forEach((t) => seenTrackIds.add(t.id));
             }
         });
 
@@ -1320,58 +1361,42 @@ export class LosslessAPI {
         return streamUrl;
     }
 
-    async getVideoStreamUrl(id) {
-        const cacheKey = `video_stream_${id}`;
-
-        if (this.streamCache.has(cacheKey)) {
-            return this.streamCache.get(cacheKey);
-        }
-
-        const lookup = await this.getVideo(id);
-
-        let streamUrl;
-
-        const findValue = (obj, key) => {
-            if (!obj || typeof obj !== 'object') return null;
-            if (obj[key]) return obj[key];
-            for (const v of Object.values(obj)) {
-                if (v && typeof v === 'object') {
-                    const f = findValue(v, key);
-                    if (f) return f;
-                }
-            }
-            return null;
-        };
-
-        const manifest = findValue(lookup, 'manifest') || findValue(lookup, 'Manifest');
-        if (manifest) {
-            streamUrl = this.extractStreamUrlFromManifest(manifest);
-        }
-
-        if (!streamUrl) {
-            streamUrl =
-                findValue(lookup, 'OriginalTrackUrl') ||
-                findValue(lookup, 'originalTrackUrl') ||
-                findValue(lookup, 'url') ||
-                findValue(lookup, 'streamUrl') ||
-                findValue(lookup, 'manifestUrl');
-        }
-
-        if (!streamUrl) {
-            throw new Error(`Could not resolve video stream URL for ID: ${id}`);
-        }
-
-        this.streamCache.set(cacheKey, streamUrl);
-        return streamUrl;
-    }
-
+    /**
+     * Downloads a track or video from TIDAL in the specified quality.
+     *
+     * Handles multiple stream types (DASH, HLS, and direct HTTP), applies post-processing
+     * for audio tracks, adds metadata, and optionally triggers a browser download.
+     *
+     * @async
+     * @param {string} id - The TIDAL track or video ID
+     * @param {string} [quality='HI_RES_LOSSLESS'] - The desired audio quality (e.g., 'HI_RES_LOSSLESS', 'LOSSLESS', 'HIGH', 'NORMAL').
+     *                                               Custom FFMPEG formats are transcoded from LOSSLESS.
+     * @param {string} filename - The filename to save the downloaded content as
+     * @param {Object} [options={}] - Additional download options
+     * @param {Function} [options.onProgress] - Callback function for progress updates with signature:
+     *                                          `(progressEvent) => void`
+     * @param {Object} [options.track] - Track metadata object to attach to the audio file
+     * @param {boolean} [options.calculateDashBytes=true] - Whether to calculate total bytes for DASH streams
+     * @param {AbortSignal} [options.signal] - AbortSignal to cancel the download
+     * @param {boolean} [options.triggerDownload=true] - Whether to trigger browser download after completion
+     *
+     * @returns {Promise<Blob>} The downloaded content as a Blob object
+     *
+     * @throws {Error} If stream URL cannot be resolved, manifest is missing, or download fails
+     * @throws {AbortError} If the download is aborted via the signal
+     * @throws {MP3EncodingError|FfmpegError} If audio transcoding fails
+     */
     async downloadTrack(id, quality = 'HIGH', filename, options = {}) {
-        const { onProgress, track } = options;
+        // Load ffmpeg in the background.
+        loadFfmpeg().catch(console.error);
+
+        const { onProgress, track, calculateDashBytes = true } = options;
+        const prefetchPromises = prefetchMetadataObjects(track, this);
         const isVideo = track?.type === 'video';
 
         try {
-            // MP3_320 is not a native TIDAL quality, we download LOSSLESS and convert
-            const downloadQuality = quality === 'MP3_320' ? 'LOSSLESS' : quality;
+            // Custom FFMPEG formats are not native TIDAL qualities; download LOSSLESS and transcode
+            const downloadQuality = isCustomFormat(quality) ? 'LOSSLESS' : quality;
 
             let lookup;
             if (isVideo) {
@@ -1422,7 +1447,8 @@ export class LosslessAPI {
                     const downloader = new DashDownloader();
                     blob = await downloader.downloadDashStream(streamUrl, {
                         signal: options.signal,
-                        onProgress: options.onProgress,
+                        onProgress,
+                        calculateDashBytes: calculateDashBytes ?? true,
                     });
                 } catch (dashError) {
                     console.error('DASH download failed:', dashError);
@@ -1440,7 +1466,7 @@ export class LosslessAPI {
                     const downloader = new HlsDownloader();
                     blob = await downloader.downloadHlsStream(streamUrl, {
                         signal: options.signal,
-                        onProgress: options.onProgress,
+                        onProgress,
                     });
                 } catch (hlsError) {
                     console.error('HLS download failed:', hlsError);
@@ -1461,7 +1487,7 @@ export class LosslessAPI {
 
                 let receivedBytes = 0;
 
-                if (response.body && onProgress) {
+                if (response.body) {
                     const reader = response.body.getReader();
                     const chunks = [];
 
@@ -1473,89 +1499,28 @@ export class LosslessAPI {
                             chunks.push(value);
                             receivedBytes += value.byteLength;
 
-                            onProgress({
-                                stage: 'downloading',
-                                receivedBytes,
-                                totalBytes: totalBytes || undefined,
-                            });
+                            onProgress?.(new DownloadProgress(receivedBytes, totalBytes || undefined));
                         }
                     }
 
                     const defaultMime = isVideo ? 'video/mp4' : 'audio/flac';
                     blob = new Blob(chunks, { type: response.headers.get('Content-Type') || defaultMime });
                 } else {
+                    onProgress?.(new DownloadProgress(0, undefined));
                     blob = await response.blob();
-                    if (onProgress) {
-                        onProgress({
-                            stage: 'downloading',
-                            receivedBytes: blob.size,
-                            totalBytes: blob.size,
-                        });
-                    }
+                    onProgress?.(new DownloadProgress(blob.size, blob.size));
                 }
             }
 
             if (!isVideo) {
-                // Convert to MP3 320kbps if requested
-                if (quality === 'MP3_320') {
-                    try {
-                        blob = await encodeToMp3(blob, onProgress, options.signal);
-                    } catch (encodingError) {
-                        if (onProgress) {
-                            onProgress({
-                                stage: 'error',
-                                message: `Encoding failed: ${encodingError.message}`,
-                            });
-                        }
-                        throw encodingError;
-                    }
-                }
-
-                if (quality.endsWith('LOSSLESS')) {
-                    try {
-                        switch (losslessContainerSettings.getContainer()) {
-                            case 'flac':
-                                if ((await getExtensionFromBlob(blob)) != 'flac') {
-                                    blob = await ffmpeg(
-                                        blob,
-                                        { args: ['-vn', '-map_metadata', '-1', '-map', '0:a', '-c:a', 'flac'] },
-                                        'output.flac',
-                                        'audio/flac',
-                                        onProgress,
-                                        options.signal
-                                    );
-                                }
-                                break;
-                            case 'alac':
-                                blob = await ffmpeg(
-                                    blob,
-                                    { args: ['-c:a', 'alac'] },
-                                    'output.m4a',
-                                    'audio/mp4',
-                                    onProgress,
-                                    options.signal
-                                );
-                                break;
-                            default:
-                                break;
-                        }
-                    } catch (error) {
-                        if (error?.name === 'AbortError') {
-                            throw error;
-                        }
-
-                        console.error('Lossless container conversion failed:', error);
-                    }
-                }
+                blob = await applyAudioPostProcessing(blob, quality, onProgress, options.signal);
 
                 // Add metadata if track information is provided
                 if (track) {
-                    if (onProgress) {
-                        onProgress({
-                            stage: 'processing',
-                            message: 'Adding metadata...',
-                        });
-                    }
+                    onProgress?.({
+                        stage: 'processing',
+                        message: 'Adding metadata...',
+                    });
 
                     const enrichedTrack = { ...track };
                     if (lookup.info) {
@@ -1567,28 +1532,64 @@ export class LosslessAPI {
                         };
                     }
 
-                    blob = await addMetadataToAudio(blob, enrichedTrack, this, quality);
+                    if (
+                        track.album?.id &&
+                        (track.album?.totalDiscs == null || track.album?.numberOfTracksOnDisc == null)
+                    ) {
+                        try {
+                            const albumData = await this.getAlbum(track.album.id);
+                            if (albumData.tracks?.length > 0) {
+                                const discTrackCounts = new Map();
+                                let maxDiscNumber = 0;
+                                for (const t of albumData.tracks) {
+                                    const dn = getTrackDiscNumber(t);
+                                    discTrackCounts.set(dn, (discTrackCounts.get(dn) || 0) + 1);
+                                    if (dn > maxDiscNumber) maxDiscNumber = dn;
+                                }
+                                const totalDiscs = maxDiscNumber || 1;
+                                const discNumber = getTrackDiscNumber(track);
+                                enrichedTrack.album = {
+                                    ...(enrichedTrack.album || {}),
+                                    totalDiscs: track.album?.totalDiscs ?? totalDiscs,
+                                    numberOfTracksOnDisc:
+                                        track.album?.numberOfTracksOnDisc ?? discTrackCounts.get(discNumber),
+                                };
+                            }
+                        } catch (e) {
+                            console.warn('Failed to fetch album for disc info:', e);
+                        }
+                    }
+
+                    onProgress?.(new DownloadProgress('Adding metadata'));
+                    blob = await addMetadataToAudio(blob, enrichedTrack, this, quality, prefetchPromises);
                 }
             }
 
-            // Detect actual format and fix filename extension if needed
-            const detectedExtension = await getExtensionFromBlob(blob);
-            let finalFilename = filename;
+            if (options.triggerDownload ?? true) {
+                // Detect actual format and fix filename extension if needed
+                const detectedExtension = await getExtensionFromBlob(blob);
+                let finalFilename = filename;
 
-            // Replace extension if it doesn't match detected format
-            const currentExtension = filename.split('.').pop()?.toLowerCase();
-            if (currentExtension && currentExtension !== detectedExtension) {
-                finalFilename = filename.replace(/\.[^.]+$/, `.${detectedExtension}`);
+                // Replace extension if it doesn't match detected format
+                const currentExtension = filename.split('.').pop()?.toLowerCase();
+                if (currentExtension && currentExtension !== detectedExtension) {
+                    finalFilename = filename.replace(/\.[^.]+$/, `.${detectedExtension}`);
+                }
+
+                triggerDownload(blob, finalFilename);
             }
 
-            this.triggerDownload(blob, finalFilename);
             return blob;
         } catch (error) {
             if (error.name === 'AbortError') {
                 throw error;
             }
             console.error('Download failed:', error);
-            if (error instanceof MP3EncodingError || error.code === 'MP3_ENCODING_FAILED') {
+            if (
+                error instanceof MP3EncodingError ||
+                error instanceof FfmpegError ||
+                error.code === 'MP3_ENCODING_FAILED'
+            ) {
                 throw error;
             }
             if (error.message === RATE_LIMIT_ERROR_MESSAGE) {
@@ -1596,17 +1597,6 @@ export class LosslessAPI {
             }
             throw new Error('Download failed. The stream may require a proxy.');
         }
-    }
-
-    triggerDownload(blob, filename) {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
     }
 
     getCoverUrl(id, size = '320') {
@@ -1632,7 +1622,23 @@ export class LosslessAPI {
         }
 
         const formattedId = String(id).replace(/-/g, '/');
-        return `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`)}`;
+        return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+    }
+
+    getVideoCoverUrl(imageId, size = '1280') {
+        if (!imageId) {
+            return null;
+        }
+
+        if (
+            typeof imageId === 'string' &&
+            (imageId.startsWith('http') || imageId.startsWith('blob:') || imageId.startsWith('assets/'))
+        ) {
+            return imageId;
+        }
+
+        const formattedId = String(imageId).replace(/-/g, '/');
+        return `https://resources.tidal.com/images/${formattedId}/${size}x720.jpg`;
     }
 
     async clearCache() {

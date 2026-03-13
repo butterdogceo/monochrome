@@ -10,7 +10,6 @@ import {
     cardSettings,
     waveformSettings,
     replayGainSettings,
-    smoothScrollingSettings,
     downloadQualitySettings,
     losslessContainerSettings,
     coverArtSizeSettings,
@@ -41,7 +40,7 @@ import { getButterchurnPresets } from './visualizers/butterchurn.js';
 import { db } from './db.js';
 import { authManager } from './accounts/auth.js';
 import { syncManager } from './accounts/pocketbase.js';
-import { saveFirebaseConfig, clearFirebaseConfig } from './accounts/config.js';
+import { containerFormats, customFormats } from './ffmpegFormats.ts';
 
 export function initializeSettings(scrobbler, player, api, ui) {
     // Restore last active settings tab
@@ -800,21 +799,103 @@ export function initializeSettings(scrobbler, player, api, ui) {
     // Download Quality setting
     const downloadQualitySetting = document.getElementById('download-quality-setting');
     if (downloadQualitySetting) {
+        // Assign categories to the static (native) options already in the HTML
+        const staticCategories = {
+            HI_RES_LOSSLESS: 'Lossless',
+            LOSSLESS: 'Lossless',
+            HIGH: 'AAC',
+            LOW: 'AAC',
+        };
+
+        // Collect static options first (preserving their original order)
+        const allOptions = Array.from(downloadQualitySetting.options).map((opt) => ({
+            value: opt.value,
+            text: opt.textContent,
+            category: staticCategories[opt.value] || 'Other',
+        }));
+
+        // Append custom (ffmpeg-transcoded) format options
+        for (const [key, fmt] of Object.entries(customFormats)) {
+            allOptions.push({ value: key, text: fmt.displayName, category: fmt.category });
+        }
+
+        // Sort by category order first, then by bitrate descending within each category
+        // so higher-quality options always appear before lower-quality ones.
+        // Options without an explicit kbps value (lossless) use Infinity so they
+        // sort to the top; ties fall back to display-name descending.
+        const getBitrate = (text) => {
+            const m = text.match(/(\d+)\s*kbps/i);
+            return m ? parseInt(m[1], 10) : Infinity;
+        };
+        const categoryOrder = ['Lossless', 'AAC', 'MP3', 'OGG'];
+        allOptions.sort((a, b) => {
+            const ai = categoryOrder.indexOf(a.category);
+            const bi = categoryOrder.indexOf(b.category);
+            const categoryDiff = (ai === -1 ? categoryOrder.length : ai) - (bi === -1 ? categoryOrder.length : bi);
+            if (categoryDiff !== 0) return categoryDiff;
+            const bitrateA = getBitrate(a.text);
+            const bitrateB = getBitrate(b.text);
+            if (bitrateA !== bitrateB) return bitrateB - bitrateA;
+            return b.text.localeCompare(a.text);
+        });
+
+        // Rebuild the select with optgroup elements per category
+        downloadQualitySetting.innerHTML = '';
+        let currentGroup = null;
+        let currentCategory = null;
+        for (const opt of allOptions) {
+            if (opt.category !== currentCategory) {
+                currentCategory = opt.category;
+                currentGroup = document.createElement('optgroup');
+                currentGroup.label = opt.category;
+                downloadQualitySetting.appendChild(currentGroup);
+            }
+            const option = document.createElement('option');
+            option.value = opt.value;
+            option.textContent = opt.text;
+            currentGroup.appendChild(option);
+        }
+
         downloadQualitySetting.value = downloadQualitySettings.getQuality();
 
         downloadQualitySetting.addEventListener('change', (e) => {
             downloadQualitySettings.setQuality(e.target.value);
+            updateLosslessContainerVisibility();
         });
     }
 
     const losslessContainerSetting = document.getElementById('lossless-container-setting');
+    const losslessContainerSettingItem = losslessContainerSetting?.closest('.setting-item');
+
+    /** Shows/hides the Lossless Container setting based on the selected quality */
+    function updateLosslessContainerVisibility() {
+        if (!losslessContainerSettingItem) return;
+        const quality = downloadQualitySettings.getQuality();
+        const isLossless = quality === 'LOSSLESS' || quality === 'HI_RES_LOSSLESS';
+        losslessContainerSettingItem.style.display = isLossless ? '' : 'none';
+    }
+
     if (losslessContainerSetting) {
+        const noChangeOption = losslessContainerSetting.querySelector('option:last-child');
+        noChangeOption.remove();
+
+        for (const [internalName, { displayName }] of Object.entries(containerFormats)) {
+            const option = document.createElement('option');
+            option.value = internalName;
+            option.textContent = displayName;
+            losslessContainerSetting.appendChild(option);
+        }
+
+        losslessContainerSetting.append(noChangeOption);
+
         losslessContainerSetting.value = losslessContainerSettings.getContainer();
 
         losslessContainerSetting.addEventListener('change', (e) => {
             losslessContainerSettings.setContainer(e.target.value);
         });
     }
+
+    updateLosslessContainerVisibility();
 
     // Cover Art Size setting
     const coverArtSizeSetting = document.getElementById('cover-art-size-setting');
@@ -846,11 +927,56 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    const zippedBulkDownloadsToggle = document.getElementById('zipped-bulk-downloads-toggle');
-    if (zippedBulkDownloadsToggle) {
-        zippedBulkDownloadsToggle.checked = !bulkDownloadSettings.shouldForceIndividual();
-        zippedBulkDownloadsToggle.addEventListener('change', (e) => {
-            bulkDownloadSettings.setForceIndividual(!e.target.checked);
+    const forceZipBlobToggle = document.getElementById('force-zip-blob-toggle');
+    const forceZipBlobSettingItem = forceZipBlobToggle?.closest('.setting-item');
+    const hasFileSystemAccess =
+        'showSaveFilePicker' in window &&
+        typeof FileSystemFileHandle !== 'undefined' &&
+        'createWritable' in FileSystemFileHandle.prototype;
+
+    /** Shows/hides the Force ZIP as Blob setting based on method and browser support */
+    function updateForceZipBlobVisibility() {
+        if (!forceZipBlobSettingItem) return;
+        const method = bulkDownloadSettings.getMethod();
+        // Only relevant when zip method is selected and the browser supports streaming
+        const visible = method === 'zip' && hasFileSystemAccess;
+        forceZipBlobSettingItem.style.display = visible ? '' : 'none';
+    }
+
+    const bulkDownloadMethod = document.getElementById('bulk-download-method');
+    if (bulkDownloadMethod) {
+        // Remove the folder picker option if the browser doesn't support it
+        if (!('showDirectoryPicker' in window)) {
+            const folderOption = bulkDownloadMethod.querySelector('option[value="folder"]');
+            if (folderOption) {
+                folderOption.remove();
+            }
+            // If the stored method is 'folder', fall back to 'zip'
+            if (bulkDownloadSettings.getMethod() === 'folder') {
+                bulkDownloadSettings.setMethod('zip');
+            }
+        }
+        bulkDownloadMethod.value = bulkDownloadSettings.getMethod();
+        bulkDownloadMethod.addEventListener('change', (e) => {
+            bulkDownloadSettings.setMethod(e.target.value);
+            updateForceZipBlobVisibility();
+        });
+    }
+
+    if (forceZipBlobToggle) {
+        forceZipBlobToggle.checked = bulkDownloadSettings.shouldForceZipBlob();
+        forceZipBlobToggle.addEventListener('change', (e) => {
+            bulkDownloadSettings.setForceZipBlob(e.target.checked);
+        });
+    }
+
+    updateForceZipBlobVisibility();
+
+    const includeCoverToggle = document.getElementById('include-cover-toggle');
+    if (includeCoverToggle) {
+        includeCoverToggle.checked = playlistSettings.shouldIncludeCover();
+        includeCoverToggle.addEventListener('change', (e) => {
+            playlistSettings.setIncludeCover(e.target.checked);
         });
     }
 
@@ -2106,17 +2232,6 @@ export function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    // Smooth Scrolling Toggle
-    const smoothScrollingToggle = document.getElementById('smooth-scrolling-toggle');
-    if (smoothScrollingToggle) {
-        smoothScrollingToggle.checked = smoothScrollingSettings.isEnabled();
-        smoothScrollingToggle.addEventListener('change', (e) => {
-            smoothScrollingSettings.setEnabled(e.target.checked);
-
-            window.dispatchEvent(new CustomEvent('smooth-scrolling-toggle', { detail: { enabled: e.target.checked } }));
-        });
-    }
-
     // Visualizer Sensitivity
     const visualizerSensitivitySlider = document.getElementById('visualizer-sensitivity-slider');
     const visualizerSensitivityValue = document.getElementById('visualizer-sensitivity-value');
@@ -2274,6 +2389,9 @@ export function initializeSettings(scrobbler, player, api, ui) {
                 ui.visualizer.setPreset(val);
             }
             updateButterchurnSettingsVisibility();
+
+            //Since changing the preset breaks the visualizer, a location.reload() is added to make sure that it works
+            window.location.reload();
         });
     }
 
@@ -2746,7 +2864,7 @@ export function initializeSettings(scrobbler, player, api, ui) {
         }
     });
 
-    document.getElementById('firebase-clear-cloud-btn')?.addEventListener('click', async () => {
+    document.getElementById('auth-clear-cloud-btn')?.addEventListener('click', async () => {
         if (confirm('Are you sure you want to delete ALL your data from the cloud? This cannot be undone.')) {
             try {
                 await syncManager.clearCloudData();
@@ -2853,41 +2971,38 @@ export function initializeSettings(scrobbler, player, api, ui) {
     const customDbBtn = document.getElementById('custom-db-btn');
     const customDbModal = document.getElementById('custom-db-modal');
     const customPbUrlInput = document.getElementById('custom-pb-url');
-    const customFirebaseConfigInput = document.getElementById('custom-firebase-config');
+    const customAppwriteEndpointInput = document.getElementById('custom-appwrite-endpoint');
+    const customAppwriteProjectInput = document.getElementById('custom-appwrite-project');
     const customDbSaveBtn = document.getElementById('custom-db-save');
     const customDbResetBtn = document.getElementById('custom-db-reset');
     const customDbCancelBtn = document.getElementById('custom-db-cancel');
 
     if (customDbBtn && customDbModal) {
-        const fbFromEnv = !!window.__FIREBASE_CONFIG__;
+        const appwriteFromEnv = !!(window.__APPWRITE_ENDPOINT__ || window.__APPWRITE_PROJECT_ID__);
         const pbFromEnv = !!window.__POCKETBASE_URL__;
 
         // Hide entire setting if both are server-configured
-        if (fbFromEnv && pbFromEnv) {
+        if (appwriteFromEnv && pbFromEnv) {
             const settingItem = customDbBtn.closest('.setting-item');
             if (settingItem) settingItem.style.display = 'none';
         }
 
         // Hide individual fields in the modal
         if (pbFromEnv && customPbUrlInput) customPbUrlInput.closest('div[style]').style.display = 'none';
-        if (fbFromEnv && customFirebaseConfigInput)
-            customFirebaseConfigInput.closest('div[style]').style.display = 'none';
+        if (appwriteFromEnv) {
+            if (customAppwriteEndpointInput) customAppwriteEndpointInput.closest('div[style]').style.display = 'none';
+            if (customAppwriteProjectInput) customAppwriteProjectInput.closest('div[style]').style.display = 'none';
+        }
 
         customDbBtn.addEventListener('click', () => {
             const pbUrl = localStorage.getItem('monochrome-pocketbase-url') || '';
-            const fbConfig = localStorage.getItem('monochrome-firebase-config');
+            const appwriteEndpoint = localStorage.getItem('monochrome-appwrite-endpoint') || '';
+            const appwriteProject = localStorage.getItem('monochrome-appwrite-project') || '';
 
-            if (!pbFromEnv) customPbUrlInput.value = pbUrl;
-            if (!fbFromEnv) {
-                if (fbConfig) {
-                    try {
-                        customFirebaseConfigInput.value = JSON.stringify(JSON.parse(fbConfig), null, 2);
-                    } catch {
-                        customFirebaseConfigInput.value = fbConfig;
-                    }
-                } else {
-                    customFirebaseConfigInput.value = '';
-                }
+            if (!pbFromEnv && customPbUrlInput) customPbUrlInput.value = pbUrl;
+            if (!appwriteFromEnv) {
+                if (customAppwriteEndpointInput) customAppwriteEndpointInput.value = appwriteEndpoint;
+                if (customAppwriteProjectInput) customAppwriteProjectInput.value = appwriteProject;
             }
 
             customDbModal.classList.add('active');
@@ -2901,25 +3016,30 @@ export function initializeSettings(scrobbler, player, api, ui) {
         customDbModal.querySelector('.modal-overlay').addEventListener('click', closeCustomDbModal);
 
         customDbSaveBtn.addEventListener('click', () => {
-            const pbUrl = customPbUrlInput.value.trim();
-            const fbConfigStr = customFirebaseConfigInput.value.trim();
-
-            if (pbUrl) {
-                localStorage.setItem('monochrome-pocketbase-url', pbUrl);
-            } else {
-                localStorage.removeItem('monochrome-pocketbase-url');
+            if (!pbFromEnv && customPbUrlInput) {
+                const pbUrl = customPbUrlInput.value.trim();
+                if (pbUrl) {
+                    localStorage.setItem('monochrome-pocketbase-url', pbUrl);
+                } else {
+                    localStorage.removeItem('monochrome-pocketbase-url');
+                }
             }
 
-            if (fbConfigStr) {
-                try {
-                    const fbConfig = JSON.parse(fbConfigStr);
-                    saveFirebaseConfig(fbConfig);
-                } catch {
-                    alert('Invalid JSON for Firebase Config');
-                    return;
+            if (!appwriteFromEnv) {
+                const endpoint = customAppwriteEndpointInput?.value.trim();
+                const project = customAppwriteProjectInput?.value.trim();
+
+                if (endpoint) {
+                    localStorage.setItem('monochrome-appwrite-endpoint', endpoint);
+                } else {
+                    localStorage.removeItem('monochrome-appwrite-endpoint');
                 }
-            } else {
-                clearFirebaseConfig();
+
+                if (project) {
+                    localStorage.setItem('monochrome-appwrite-project', project);
+                } else {
+                    localStorage.removeItem('monochrome-appwrite-project');
+                }
             }
 
             alert('Settings saved. Reloading...');
@@ -2929,7 +3049,8 @@ export function initializeSettings(scrobbler, player, api, ui) {
         customDbResetBtn.addEventListener('click', () => {
             if (confirm('Reset custom database settings to default?')) {
                 localStorage.removeItem('monochrome-pocketbase-url');
-                clearFirebaseConfig();
+                localStorage.removeItem('monochrome-appwrite-endpoint');
+                localStorage.removeItem('monochrome-appwrite-project');
                 alert('Settings reset. Reloading...');
                 window.location.reload();
             }
