@@ -1,7 +1,7 @@
 //js/utils.js
 import { qualityBadgeSettings, coverArtSizeSettings, trackDateSettings } from './storage.js';
 
-export const QUALITY = 'HI_RES_LOSSLESS';
+export const QUALITY = 'HIGH'; // Default to HIGH to avoid excessive bandwidth usage and potential rate limits with Hi-Res streaming
 
 export const REPEAT_MODE = {
     OFF: 0,
@@ -10,13 +10,13 @@ export const REPEAT_MODE = {
 };
 
 export const AUDIO_QUALITIES = {
-    HI_RES_LOSSLESS: 'HI_RES_LOSSLESS',
-    LOSSLESS: 'LOSSLESS',
+    // HI_RES_LOSSLESS: 'HI_RES_LOSSLESS',
+    // LOSSLESS: 'LOSSLESS',
     HIGH: 'HIGH',
     LOW: 'LOW',
 };
 
-export const QUALITY_PRIORITY = ['HI_RES_LOSSLESS', 'LOSSLESS', 'HIGH', 'LOW'];
+export const QUALITY_PRIORITY = ['HIGH', 'LOW']; // 'HI_RES_LOSSLESS', 'LOSSLESS'
 
 export const QUALITY_TOKENS = {
     HI_RES_LOSSLESS: [

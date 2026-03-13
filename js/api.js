@@ -17,6 +17,41 @@ import { ffmpeg } from './ffmpeg.js';
 export const DASH_MANIFEST_UNAVAILABLE_CODE = 'DASH_MANIFEST_UNAVAILABLE';
 const TIDAL_V2_TOKEN = 'txNoH4kkV41MfH25';
 
+// Request queue to prevent hammering the API with concurrent requests
+class RequestQueue {
+    constructor(minDelay = 50) {
+        this.queue = [];
+        this.processing = false;
+        this.minDelay = minDelay;
+    }
+
+    async add(fn) {
+        return new Promise((resolve, reject) => {
+            this.queue.push({ fn, resolve, reject });
+            this.process();
+        });
+    }
+
+    async process() {
+        if (this.processing || this.queue.length === 0) return;
+        this.processing = true;
+
+        while (this.queue.length > 0) {
+            const { fn, resolve, reject } = this.queue.shift();
+            try {
+                const result = await fn();
+                resolve(result);
+            } catch (e) {
+                reject(e);
+            }
+            if (this.queue.length > 0) {
+                await delay(this.minDelay);
+            }
+        }
+        this.processing = false;
+    }
+}
+
 export class LosslessAPI {
     constructor(settings) {
         this.settings = settings;
@@ -25,6 +60,8 @@ export class LosslessAPI {
             ttl: 1000 * 60 * 30,
         });
         this.streamCache = new Map();
+        this.requestQueue = new RequestQueue(50); // 50ms minimum between requests
+        this.inFlightRequests = new Map(); // Deduplicate concurrent requests
 
         setInterval(
             () => {
@@ -282,6 +319,9 @@ export class LosslessAPI {
                 const candidate = entry.OriginalTrackUrl;
                 if (typeof candidate === 'string') {
                     originalTrackUrl = candidate;
+                    if (!originalTrackUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=') && !originalTrackUrl.startsWith('blob:')) {
+                        originalTrackUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(originalTrackUrl))}`;
+                    }
                 }
             }
         }
@@ -611,6 +651,8 @@ export class LosslessAPI {
 
                     tracks = tracks.concat(preparedItems);
                     offset += preparedItems.length;
+                    // Add delay between pagination requests to avoid hitting rate limits
+                    await delay(100);
                 } catch (error) {
                     console.error(`Error fetching album tracks at offset ${offset}:`, error);
                     break;
@@ -727,6 +769,8 @@ export class LosslessAPI {
 
                     tracks = tracks.concat(preparedItems);
                     offset += preparedItems.length;
+                    // Add delay between pagination requests to avoid hitting rate limits
+                    await delay(100);
                 } catch (error) {
                     console.error(`Error fetching playlist tracks at offset ${offset}:`, error);
                     break;
@@ -1168,7 +1212,30 @@ export class LosslessAPI {
         }
     }
 
-    async getTrack(id, quality = 'HI_RES_LOSSLESS') {
+    async getTrackRecommendations(id) {
+        const cached = await this.cache.get('recommendations', id);
+        if (cached) return cached;
+
+        try {
+            const response = await this.fetchWithRetry(`/recommendations/?id=${id}`, {
+                type: 'api',
+                minVersion: '2.4',
+            });
+            const json = await response.json();
+            const data = json.data || json;
+
+            const items = data.items || [];
+            const tracks = items.map((item) => this.prepareTrack(item.track || item));
+
+            await this.cache.set('recommendations', id, tracks);
+            return tracks;
+        } catch (error) {
+            console.error('Failed to fetch recommendations:', error);
+            return [];
+        }
+    }
+
+    async getTrack(id, quality = 'HIGH') {
         const cacheKey = `${id}_${quality}`;
         const cached = await this.cache.get('track', cacheKey);
         if (cached) return cached;
@@ -1181,7 +1248,7 @@ export class LosslessAPI {
         return result;
     }
 
-    async getStreamUrl(id, quality = 'HI_RES_LOSSLESS') {
+    async getStreamUrl(id, quality = 'HIGH') {
         const cacheKey = `stream_${id}_${quality}`;
 
         if (this.streamCache.has(cacheKey)) {
@@ -1198,6 +1265,10 @@ export class LosslessAPI {
             if (!streamUrl) {
                 throw new Error('Could not resolve stream URL');
             }
+        }
+
+        if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=') && !streamUrl.startsWith('blob:')) {
+            streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
         }
 
         this.streamCache.set(cacheKey, streamUrl);
@@ -1249,7 +1320,52 @@ export class LosslessAPI {
         return streamUrl;
     }
 
-    async downloadTrack(id, quality = 'HI_RES_LOSSLESS', filename, options = {}) {
+    async getVideoStreamUrl(id) {
+        const cacheKey = `video_stream_${id}`;
+
+        if (this.streamCache.has(cacheKey)) {
+            return this.streamCache.get(cacheKey);
+        }
+
+        const lookup = await this.getVideo(id);
+
+        let streamUrl;
+
+        const findValue = (obj, key) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (obj[key]) return obj[key];
+            for (const v of Object.values(obj)) {
+                if (v && typeof v === 'object') {
+                    const f = findValue(v, key);
+                    if (f) return f;
+                }
+            }
+            return null;
+        };
+
+        const manifest = findValue(lookup, 'manifest') || findValue(lookup, 'Manifest');
+        if (manifest) {
+            streamUrl = this.extractStreamUrlFromManifest(manifest);
+        }
+
+        if (!streamUrl) {
+            streamUrl =
+                findValue(lookup, 'OriginalTrackUrl') ||
+                findValue(lookup, 'originalTrackUrl') ||
+                findValue(lookup, 'url') ||
+                findValue(lookup, 'streamUrl') ||
+                findValue(lookup, 'manifestUrl');
+        }
+
+        if (!streamUrl) {
+            throw new Error(`Could not resolve video stream URL for ID: ${id}`);
+        }
+
+        this.streamCache.set(cacheKey, streamUrl);
+        return streamUrl;
+    }
+
+    async downloadTrack(id, quality = 'HIGH', filename, options = {}) {
         const { onProgress, track } = options;
         const isVideo = track?.type === 'video';
 
@@ -1293,6 +1409,10 @@ export class LosslessAPI {
                 streamUrl = this.extractStreamUrlFromManifest(manifest);
                 if (!streamUrl) {
                     throw new Error('Could not resolve stream URL');
+                }
+
+                if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=') && !streamUrl.startsWith('blob:')) {
+                    streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
                 }
             }
 
@@ -1499,7 +1619,7 @@ export class LosslessAPI {
         }
 
         const formattedId = String(id).replace(/-/g, '/');
-        return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+        return `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`)}`;
     }
 
     getArtistPictureUrl(id, size = '320') {
@@ -1512,7 +1632,7 @@ export class LosslessAPI {
         }
 
         const formattedId = String(id).replace(/-/g, '/');
-        return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+        return `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`)}`;
     }
 
     async clearCache() {

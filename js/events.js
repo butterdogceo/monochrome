@@ -206,8 +206,11 @@ export function initializePlayerEvents(player, audioPlayer, scrobbler, ui) {
 
         // Skip to next track on error to prevent queue stalling
         if (player.currentTrack) {
-            console.warn('Skipping to next track due to playback error');
-            setTimeout(() => player.playNext(), 1000); // Small delay to avoid rapid skipping
+            const isNextTrackAvailable = 
+                (player.queue.length > 0 && player.currentTrackIndex < player.queue.length - 1) ||
+                (player.repeatMode === REPEAT_MODE.ALL && player.queue.length > 1);
+            showNotification(`Playback error for "${player.currentTrack.title}". ${isNextTrackAvailable ? 'Skipping to next track...' : 'Please try again.'}`);
+            if (isNextTrackAvailable) setTimeout(() => player.playNext(), 1000); // Small delay to avoid rapid skipping
         }
     });
 

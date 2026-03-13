@@ -10,7 +10,7 @@ export function initializeDiscordRPC(player) {
         let coverUrl = 'monochrome';
         if (track.album?.cover) {
             const coverId = String(track.album.cover).replace(/-/g, '/');
-            coverUrl = `https://resources.tidal.com/images/${coverId}/320x320.jpg`;
+            coverUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://resources.tidal.com/images/${coverId}/320x320.jpg`)}`;
         }
 
         const data = {

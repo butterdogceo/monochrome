@@ -262,6 +262,9 @@ export class Player {
                 if (totalDurationEl) totalDurationEl.textContent = formatTime(track.duration);
                 document.title = `${trackTitle} • ${getTrackArtists(track)}`;
 
+                // Update previous and next track buttons
+                this
+
                 this.updatePlayingTrackIndicator();
                 this.updateMediaSession(track);
             }
@@ -601,6 +604,10 @@ export class Player {
                 this.currentRgValues = null;
                 this.applyReplayGain();
 
+                if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run') && !streamUrl.startsWith('blob:')) {
+                    streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
+                }
+
                 this.audio.src = streamUrl;
                 this.applyAudioEffects();
 
@@ -618,6 +625,7 @@ export class Player {
                     this.dashPlayer.reset(); // Ensure dash is off
                     this.dashInitialized = false;
                 }
+                
                 streamUrl = URL.createObjectURL(track.file);
                 this.currentRgValues = null; // No replaygain for local files yet
                 this.applyReplayGain();
@@ -712,6 +720,10 @@ export class Player {
                     } else {
                         streamUrl = await this.api.getStreamUrl(track.id, this.quality);
                     }
+                }
+
+                if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run') && !streamUrl.startsWith('blob:')) {
+                    streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
                 }
 
                 // Handle playback
@@ -1087,6 +1099,9 @@ export class Player {
             const index = parseInt(item.dataset.queueIndex);
             item.classList.toggle('playing', index === this.currentQueueIndex);
         });
+        // Update previous and next track buttons
+        document.getElementById('prev-btn').disabled = !this.queue[this.currentQueueIndex - 1] && this.repeatMode !== REPEAT_MODE.ALL;
+        document.getElementById('next-btn').disabled = !this.queue[this.currentQueueIndex + 1] && this.repeatMode !== REPEAT_MODE.ALL;
     }
 
     updateMediaSession(track) {
@@ -1097,21 +1112,29 @@ export class Player {
 
         const coverId = track.album?.cover;
         const trackTitle = getTrackTitle(track);
+        const hasCoverChanged = !navigator.mediaSession.metadata ||
+            navigator.mediaSession.metadata.title !== trackTitle ||
+            navigator.mediaSession.metadata.artist !== getTrackArtists(track) ||
+            navigator.mediaSession.metadata.album !== track.album?.title ||
+            (coverId && (!navigator.mediaSession.metadata.artwork || navigator.mediaSession.metadata.artwork[0].src !== this.api.getCoverUrl(coverId, '1280')));
 
-        navigator.mediaSession.metadata = new MediaMetadata({
+        let metadata = {
             title: trackTitle || 'Unknown Title',
             artist: getTrackArtists(track) || 'Unknown Artist',
             album: track.album?.title || 'Unknown Album',
-            artwork: coverId
-                ? [
-                      {
-                          src: this.api.getCoverUrl(coverId, '1280'),
-                          sizes: '1280x1280',
-                          type: 'image/jpeg',
-                      },
-                  ]
-                : undefined,
-        });
+        };
+
+        if (coverId && hasCoverChanged) {
+            metadata.artwork = [
+                {
+                    src: this.api.getCoverUrl(coverId, '1280'),
+                    sizes: '1280x1280',
+                    type: 'image/jpeg',
+                },
+            ];
+        }
+
+        navigator.mediaSession.metadata = new MediaMetadata(metadata);
 
         this.updateMediaSessionPlaybackState();
         this.updateMediaSessionPositionState();

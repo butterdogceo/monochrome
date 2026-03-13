@@ -15,8 +15,8 @@ function getTrackArtists(track = {}, { fallback = 'Unknown Artist' } = {}) {
 class ServerAPI {
     constructor() {
         this.INSTANCES_URLS = [
-            'https://tidal-uptime.jiffy-puffs-1j.workers.dev/',
-            'https://tidal-uptime.props-76styles.workers.dev/',
+            'https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://tidal-uptime.jiffy-puffs-1j.workers.dev/'),
+            'https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://tidal-uptime.props-76styles.workers.dev/'),
         ];
         this.apiInstances = null;
     }
@@ -99,7 +99,7 @@ class ServerAPI {
     getCoverUrl(id, size = '1280') {
         if (!id) return '';
         const formattedId = String(id).replace(/-/g, '/');
-        return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+        return `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${btoa(`https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`)}`;
     }
 
     async getStreamUrl(id) {

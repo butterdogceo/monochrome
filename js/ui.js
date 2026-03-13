@@ -519,14 +519,14 @@ export class UIRenderer {
             href: `/folder/${folder.id}`,
             title: escapeHtml(folder.name),
             subtitle: `${folder.playlists ? folder.playlists.length : 0} playlists`,
-            imageHTML: `<img src="${imageSrc}" alt="${escapeHtml(folder.name)}" class="card-image" loading="lazy" onerror="this.src='/assets/folder.png'">`,
+            imageHTML: `<img src="${imageSrc}" alt="${escapeHtml(folder.name)}" class="card-image" loading="lazy" onerror="this.src='./assets/folder.png'">`,
             actionButtonsHTML: '',
             isCompact,
         });
     }
 
     createMixCardHTML(mix) {
-        const imageSrc = mix.cover || '/assets/appicon.png';
+        const imageSrc = mix.cover || './assets/appicon.png';
         const description = mix.subTitle || mix.description || '';
         const isCompact = cardSettings.isCompactAlbum();
 
@@ -1362,12 +1362,17 @@ export class UIRenderer {
         let isFsSeeking = false;
         let wasFsPlaying = false;
         let lastFsSeekPosition = 0;
+        let isDASHFsSeeking = false;
 
         const updateFsSeekUI = (position) => {
-            if (!isNaN(audioPlayer.duration)) {
+            const duration = (!isNaN(audioPlayer.duration) && audioPlayer.duration > 0 && audioPlayer.duration !== Infinity) 
+                ? audioPlayer.duration 
+                : (this.player.currentTrack?.duration || 0);
+
+            if (duration > 0) {
                 progressFill.style.width = `${position * 100}%`;
                 if (currentTimeEl) {
-                    currentTimeEl.textContent = formatTime(position * audioPlayer.duration);
+                    currentTimeEl.textContent = formatTime(position * duration);
                 }
             }
         };
@@ -1375,7 +1380,10 @@ export class UIRenderer {
         progressBar.addEventListener('mousedown', (e) => {
             isFsSeeking = true;
             wasFsPlaying = !audioPlayer.paused;
-            if (wasFsPlaying) audioPlayer.pause();
+            // Only pause non-DASH streams to avoid state issues with DASH player
+            if (wasFsPlaying && !this.player.dashInitialized) {
+                audioPlayer.pause();
+            }
 
             const rect = progressBar.getBoundingClientRect();
             const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -1389,7 +1397,10 @@ export class UIRenderer {
                 e.preventDefault();
                 isFsSeeking = true;
                 wasFsPlaying = !audioPlayer.paused;
-                if (wasFsPlaying) audioPlayer.pause();
+                // Only pause non-DASH streams to avoid state issues with DASH player
+                if (wasFsPlaying && !this.player.dashInitialized) {
+                    audioPlayer.pause();
+                }
 
                 const touch = e.touches[0];
                 const rect = progressBar.getBoundingClientRect();
@@ -1423,11 +1434,28 @@ export class UIRenderer {
             { passive: false }
         );
 
+        // Clear isDASHFsSeeking flag after DASH seek completes
+        audioPlayer.addEventListener('seeked', () => {
+            isDASHFsSeeking = false;
+        });
+
         document.addEventListener('mouseup', () => {
             if (isFsSeeking) {
-                if (!isNaN(audioPlayer.duration)) {
-                    audioPlayer.currentTime = lastFsSeekPosition * audioPlayer.duration;
-                    if (wasFsPlaying) audioPlayer.play();
+                const duration = (!isNaN(audioPlayer.duration) && audioPlayer.duration > 0 && audioPlayer.duration !== Infinity) 
+                    ? audioPlayer.duration 
+                    : (this.player.currentTrack?.duration || 0);
+
+                if (duration > 0) {
+                    const seekTime = lastFsSeekPosition * duration;
+                    // Use dashPlayer.seek() for DASH streams, audioPlayer.currentTime for regular audio
+                    if (this.player.dashInitialized) {
+                        isDASHFsSeeking = true;
+                        this.player.dashPlayer.seek(seekTime);
+                    } else {
+                        audioPlayer.currentTime = seekTime;
+                    }
+                    this.player.updateMediaSessionPositionState();
+                    if (wasFsPlaying) audioPlayer.play().catch(e => console.error("FS Play failed", e));
                 }
                 isFsSeeking = false;
             }
@@ -1435,9 +1463,21 @@ export class UIRenderer {
 
         document.addEventListener('touchend', () => {
             if (isFsSeeking) {
-                if (!isNaN(audioPlayer.duration)) {
-                    audioPlayer.currentTime = lastFsSeekPosition * audioPlayer.duration;
-                    if (wasFsPlaying) audioPlayer.play();
+                const duration = (!isNaN(audioPlayer.duration) && audioPlayer.duration > 0 && audioPlayer.duration !== Infinity) 
+                    ? audioPlayer.duration 
+                    : (this.player.currentTrack?.duration || 0);
+
+                if (duration > 0) {
+                    const seekTime = lastFsSeekPosition * duration;
+                    // Use dashPlayer.seek() for DASH streams, audioPlayer.currentTime for regular audio
+                    if (this.player.dashInitialized) {
+                        isDASHFsSeeking = true;
+                        this.player.dashPlayer.seek(seekTime);
+                    } else {
+                        audioPlayer.currentTime = seekTime;
+                    }
+                    this.player.updateMediaSessionPositionState();
+                    if (wasFsPlaying) audioPlayer.play().catch(e => console.error("FS Play failed", e));
                 }
                 isFsSeeking = false;
             }
@@ -1577,17 +1617,20 @@ export class UIRenderer {
         const update = () => {
             if (document.getElementById('fullscreen-cover-overlay').style.display === 'none') return;
 
-            const duration = audioPlayer.duration || 0;
+            const audioDuration = (!isNaN(audioPlayer.duration) && audioPlayer.duration > 0 && audioPlayer.duration !== Infinity) 
+                ? audioPlayer.duration 
+                : (this.player.currentTrack?.duration || 0);
+
             const current = audioPlayer.currentTime || 0;
 
-            if (duration > 0) {
-                // Only update progress if not currently seeking (user is dragging)
-                if (!isFsSeeking) {
-                    const percent = (current / duration) * 100;
+            if (audioDuration > 0) {
+                // Only update progress if not currently seeking (user is dragging) and not in DASH seek
+                if (!isFsSeeking && !isDASHFsSeeking) {
+                    const percent = (current / audioDuration) * 100;
                     progressFill.style.width = `${percent}%`;
                     currentTimeEl.textContent = formatTime(current);
                 }
-                totalDurationEl.textContent = formatTime(duration);
+                totalDurationEl.textContent = formatTime(audioDuration);
             }
 
             updatePlayBtn();
@@ -2271,7 +2314,7 @@ export class UIRenderer {
             else if (picksContainer.children.length > 0 && !picksContainer.querySelector('.skeleton')) return;
 
             try {
-                const response = await fetch('/editors-picks.json');
+                const response = await fetch('./editors-picks.json');
                 if (!response.ok) throw new Error("Failed to load editor's picks");
 
                 let items = await response.json();
@@ -3395,7 +3438,7 @@ export class UIRenderer {
                             collageEl.appendChild(img);
                         });
                     } else {
-                        imageEl.src = '/assets/appicon.png';
+                        imageEl.src = './assets/appicon.png';
                         imageEl.style.display = 'block';
                         if (collageEl) collageEl.style.display = 'none';
                     }
@@ -3553,7 +3596,7 @@ export class UIRenderer {
 
                     this.extractAndApplyColor(this.api.getCoverUrl(imageId, '160'));
                 } else {
-                    imageEl.src = '/assets/appicon.png';
+                    imageEl.src = './assets/appicon.png';
                     this.setPageBackground(null);
                     this.resetVibrantColor();
                 }
@@ -3649,9 +3692,9 @@ export class UIRenderer {
             const folder = await db.getFolder(folderId);
             if (!folder) throw new Error('Folder not found');
 
-            imageEl.src = folder.cover || '/assets/folder.png';
+            imageEl.src = folder.cover || './assets/folder.png';
             imageEl.onerror = () => {
-                imageEl.src = '/assets/folder.png';
+                imageEl.src = './assets/folder.png';
             };
             imageEl.style.backgroundColor = '';
 
@@ -3803,7 +3846,7 @@ export class UIRenderer {
                     this.setPageBackground(coverUrl);
                     this.extractAndApplyColor(this.api.getCoverUrl(tracks[0].album.cover, '160'));
                 } else {
-                    imageEl.src = '/assets/appicon.png';
+                    imageEl.src = './assets/appicon.png';
                     this.setPageBackground(null);
                     this.resetVibrantColor();
                 }

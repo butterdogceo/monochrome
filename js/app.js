@@ -357,7 +357,7 @@ async function uploadCoverImage(file) {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/upload', {
+        const response = await fetch('./upload', {
             method: 'POST',
             body: formData,
         });
@@ -410,7 +410,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    const currentQuality = localStorage.getItem('playback-quality') || 'HI_RES_LOSSLESS';
+    const currentQuality = localStorage.getItem('playback-quality') || 'HIGH';
     const player = new Player(audioPlayer, api, currentQuality);
     window.monochromePlayer = player;
 
@@ -2170,7 +2170,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const allTracks = [];
 
                 const chunks = [];
-                const chunkSize = 3;
+                const chunkSize = 1; // Load 1 album at a time to reduce API load
                 const albums = allReleases;
 
                 for (let i = 0; i < albums.length; i += chunkSize) {
@@ -2564,28 +2564,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // PWA Update Logic
-    if (window.__AUTH_GATE__) {
-        disablePwaForAuthGate();
-    } else {
-        const updateSW = registerSW({
-            onNeedRefresh() {
-                if (pwaUpdateSettings.isAutoUpdateEnabled()) {
-                    // Auto-update: immediately activate the new service worker
-                    trackPwaUpdate();
-                    updateSW(true);
-                } else {
-                    // Show notification with Update button and dismiss option
-                    showUpdateNotification(() => {
-                        trackPwaUpdate();
-                        updateSW(true);
-                    });
+    // if (window.__AUTH_GATE__) {
+    //     disablePwaForAuthGate();
+    // } else {
+    //     const updateSW = registerSW({
+    //         onNeedRefresh() {
+    //             if (pwaUpdateSettings.isAutoUpdateEnabled()) {
+    //                 // Auto-update: immediately activate the new service worker
+    //                 trackPwaUpdate();
+    //                 updateSW(true);
+    //             } else {
+    //                 // Show notification with Update button and dismiss option
+    //                 showUpdateNotification(() => {
+    //                     trackPwaUpdate();
+    //                     updateSW(true);
+    //                 });
+    //             }
+    //         },
+    //         onOfflineReady() {
+    //             console.log('App ready to work offline');
+    //         },
+    //     });
+    // }
+
+    (async () => {
+        const manifest = await fetch('./manifest.json').then((res) => res.json());
+        const currentVersion = manifest.version;
+        const storedVersion = localStorage.getItem('app_version');
+
+        if (currentVersion !== storedVersion || storedVersion === null) {
+            localStorage.setItem('app_version', currentVersion);
+            showUpdateNotification();
+
+            if ('caches' in window) {
+                try {
+                    const cacheKeys = await caches.keys();
+                    await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+                } catch (error) {
+                    console.warn('Failed to clear caches:', error);
                 }
-            },
-            onOfflineReady() {
-                console.log('App ready to work offline');
-            },
-        });
-    }
+            }
+        }
+    })();
 
     document.getElementById('show-shortcuts-btn')?.addEventListener('click', () => {
         showKeyboardShortcuts();

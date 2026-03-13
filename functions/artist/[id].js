@@ -3,8 +3,8 @@
 class ServerAPI {
     constructor() {
         this.INSTANCES_URLS = [
-            'https://tidal-uptime.jiffy-puffs-1j.workers.dev/',
-            'https://tidal-uptime.props-76styles.workers.dev/',
+            'https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://tidal-uptime.jiffy-puffs-1j.workers.dev/'),
+            'https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://tidal-uptime.props-76styles.workers.dev/'),
         ];
         this.apiInstances = null;
     }
@@ -85,7 +85,8 @@ class ServerAPI {
     getArtistPictureUrl(id, size = '750') {
         if (!id) return '';
         const formattedId = id.replace(/-/g, '/');
-        return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+        // return `https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`;
+        return `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(`https://resources.tidal.com/images/${formattedId}/${size}x${size}.jpg`))}`;
     }
 }
 

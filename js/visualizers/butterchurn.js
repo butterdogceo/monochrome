@@ -24,7 +24,7 @@ async function loadPresetsModule() {
         if (!window.butterchurnPresets) {
             await new Promise((resolve, reject) => {
                 const script = document.createElement('script');
-                script.src = '/lib/butterchurnPresets.min.js';
+                script.src = './lib/butterchurnPresets.min.js';
                 script.onload = resolve;
                 script.onerror = reject;
                 document.head.appendChild(script);

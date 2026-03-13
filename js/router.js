@@ -2,11 +2,22 @@
 import { getTrackArtists } from './utils.js';
 import { loadProfile } from './profile.js';
 
+let hrefPathPrefix = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
+if (hrefPathPrefix.endsWith('/index.html/')) {
+    hrefPathPrefix = hrefPathPrefix.replace('/index.html/', '/');
+}
+
 export function navigate(path) {
-    if (path === window.location.pathname) {
+    // Ensure path includes the hrefPathPrefix
+    let fullPath = path;
+    if (!path.startsWith(hrefPathPrefix)) {
+        fullPath = hrefPathPrefix + (path.startsWith('/') ? path.substring(1) : path);
+    }
+    
+    if (fullPath === window.location.pathname) {
         return;
     }
-    window.history.pushState({}, '', path);
+    window.history.pushState({}, '', fullPath);
     window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
@@ -22,7 +33,13 @@ export function createRouter(ui) {
 
         let path = window.location.pathname;
 
-        if (path.startsWith('/')) path = path.substring(1);
+        // Remove the href prefix to get the relative path
+        if (path.startsWith(hrefPathPrefix)) {
+            path = path.substring(hrefPathPrefix.length);
+        } else if (path.startsWith('/')) {
+            path = path.substring(1);
+        }
+        
         if (path.endsWith('/')) path = path.substring(0, path.length - 1);
         if (path === '' || path === 'index.html') path = 'home';
 

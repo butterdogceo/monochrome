@@ -539,9 +539,9 @@ export const downloadQualitySettings = {
     STORAGE_KEY: 'download-quality',
     getQuality() {
         try {
-            return localStorage.getItem(this.STORAGE_KEY) || 'HI_RES_LOSSLESS';
+            return localStorage.getItem(this.STORAGE_KEY) || 'HIGH';
         } catch {
-            return 'HI_RES_LOSSLESS';
+            return 'HIGH';
         }
     },
     setQuality(quality) {
@@ -1930,10 +1930,10 @@ export const fontSettings = {
 
     getDefaultConfig() {
         return {
-            type: 'preset',
+            type: 'google',
             family: 'Inter',
             fallback: 'sans-serif',
-            weights: [400, 500, 600, 700, 800],
+            weights: [100, 200, 300, 400, 500, 600, 700],
         };
     },
 
@@ -2211,7 +2211,7 @@ export const fontSettings = {
             link = document.createElement('link');
             link.id = APPLE_FONT_LINK_ID;
             link.rel = 'stylesheet';
-            link.href = '/fonts/apple/sf-pro-display.css';
+            link.href = './fonts/apple/sf-pro-display.css';
             document.head.appendChild(link);
         }
 

@@ -47,7 +47,7 @@ async function loadArtistsPopularity() {
 
 async function loadArtistsData() {
     try {
-        const response = await fetch('https://assets.artistgrid.cx/artists.ndjson');
+        const response = await fetch('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=' + btoa('https://assets.artistgrid.cx/artists.ndjson'));
         if (!response.ok) throw new Error('Network response was not ok');
         const text = await response.text();
         artistsData = text
@@ -289,6 +289,10 @@ export function createProjectCardHTML(era, artist, sheetId, trackCount) {
         </button>
     `;
 
+    if (era.image) {
+        era.image = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(era.image))}`;
+    }
+
     return `
         <div class="card" data-tracker-project-id="${encodeURIComponent(era.name)}" data-sheet-id="${sheetId}" style="cursor: pointer;">
             <div class="card-image-wrapper">
@@ -344,7 +348,7 @@ export async function renderTrackerArtistPage(sheetId, container) {
     const downloadBtn = document.getElementById('download-tracker-artist-btn');
 
     const normalizedName = normalizeArtistName(artist.name);
-    imageEl.src = `https://assets.artistgrid.cx/${normalizedName}.webp`;
+    imageEl.src = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(`https://assets.artistgrid.cx/${normalizedName}.webp`))}`;
     imageEl.onerror = function () {
         this.src = 'assets/logo.svg';
     };
@@ -583,6 +587,10 @@ export async function renderTrackerProjectPage(sheetId, projectName, container, 
     const mixBtn = document.getElementById('album-mix-btn');
     const addToPlaylistBtn = document.getElementById('add-album-to-playlist-btn');
 
+    if (era.image) {
+        era.image = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(era.image))}`;
+    }
+
     // Set album page content
     imageEl.src = era.image || 'assets/logo.svg';
     imageEl.style.backgroundColor = '';
@@ -776,7 +784,7 @@ export async function renderUnreleasedPage(container) {
         artistCard.dataset.artistName = artist.name.toLowerCase();
 
         const normalizedName = normalizeArtistName(artist.name);
-        const coverImage = `https://assets.artistgrid.cx/${normalizedName}.webp`;
+        const coverImage = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(`https://assets.artistgrid.cx/${normalizedName}.webp`))}`;
 
         artistCard.innerHTML = `
             <div class="card-image-wrapper">
@@ -889,6 +897,10 @@ export async function renderTrackerTrackPage(trackId, container, _ui) {
     const prodEl = document.getElementById('album-detail-producer');
     const tracklistContainer = document.getElementById('album-detail-tracklist');
     const playBtn = document.getElementById('play-album-btn');
+
+    if (era.image) {
+        era.image = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(era.image))}`;
+    }
 
     imageEl.src = era.image || 'assets/logo.svg';
     imageEl.style.backgroundColor = '';
