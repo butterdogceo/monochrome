@@ -51,11 +51,21 @@
 
 ---
 
+## Why does this fork exist?
+
+This version proxies all requests through a custom proxy backend, to unblock access on locked-down networks.
+
+Because of this, the following has been removed:
+
+- Lossless streaming (To avoid excessive bandwidth usage on the proxy)
+
+---
+
 ## Features
 
 ### Audio Quality
 
-- High-quality High-Res/lossless audio streaming
+- High-quality audio streaming
 - Support for local music files
 - API caching for improved performance
 
