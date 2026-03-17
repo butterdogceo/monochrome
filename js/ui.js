@@ -1431,11 +1431,6 @@ export class UIRenderer {
             { passive: false }
         );
 
-        // Clear isDASHFsSeeking flag after DASH seek completes
-        audioPlayer.addEventListener('seeked', () => {
-            isDASHFsSeeking = false;
-        });
-
         document.addEventListener('mouseup', () => {
             if (isFsSeeking) {
                 const activeEl = this.player.activeElement;
@@ -1600,14 +1595,14 @@ export class UIRenderer {
             const duration = activeEl.duration || 0;
             const current = activeEl.currentTime || 0;
 
-            if (audioDuration > 0) {
+            if (duration > 0) {
                 // Only update progress if not currently seeking (user is dragging) and not in DASH seek
                 if (!isFsSeeking && !isDASHFsSeeking) {
-                    const percent = (current / audioDuration) * 100;
+                    const percent = (current / duration) * 100;
                     progressFill.style.width = `${percent}%`;
                     currentTimeEl.textContent = formatTime(current);
                 }
-                totalDurationEl.textContent = formatTime(audioDuration);
+                totalDurationEl.textContent = formatTime(duration);
             }
 
             updatePlayBtn();
