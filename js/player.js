@@ -889,6 +889,11 @@ export class Player {
                     if (!canPlay || this.playbackSequence !== currentSequence) return;
                     await this.safePlay(activeElement);
                 } else {
+                    if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=') && !streamUrl.startsWith('blob:')) {
+                        streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
+                    }
+                    console.debug('Using stream URL:', streamUrl);
+
                     activeElement.src = streamUrl;
                     this.applyAudioEffects();
 

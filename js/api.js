@@ -1357,6 +1357,10 @@ export class LosslessAPI {
             throw new Error(`Could not resolve video stream URL for ID: ${id}`);
         }
 
+        if (!streamUrl.startsWith('https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=') && !streamUrl.startsWith('blob:')) {
+            streamUrl = `https://p01--purple--ywrpy28b5p6k.code.run/bruh?url=${encodeURIComponent(btoa(streamUrl))}`;
+        }
+
         this.streamCache.set(cacheKey, streamUrl);
         return streamUrl;
     }
